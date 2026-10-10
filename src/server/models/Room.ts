@@ -1,13 +1,21 @@
-import { PlayState, UserRole, RoomState, ChatMessage, RequestType } from '../../shared/types';
+import { PlayState, UserRole, RoomState, ChatMessage, RequestType, PlaylistItem } from '../../shared/types';
 import { Participant } from './Participant';
 import { ChangeRequest } from './ChangeRequest';
 
 export class Room {
   public id: string;
   public name: string;
+  public description: string;
+  public isPublic: boolean;
+  public participantLimit: number;
   public hostId: string;
   public videoId: string;
   public videoTitle: string;
+  public status: 'live' | 'ended' = 'live';
+  public isDeleted: boolean = false;
+  public emptySince?: number;
+  public startedAt: number = Date.now();
+  public endedAt?: number;
   public playState: PlayState;
   public currentTime: number; // in seconds
   public lastUpdated: number; // timestamp in ms
@@ -15,10 +23,24 @@ export class Room {
   public socketToUser: Map<string, string>;
   public requests: Map<string, ChangeRequest>;
   public chatMessages: ChatMessage[];
+  public playlist: PlaylistItem[];
+  public likes: Set<string>;
+  public recentVideos: PlaylistItem[];
+  public passwordHash?: string;
+  public purpose?: string;
+  public segments: Array<{start: number, end: number}>;
+  public currentSegmentStart?: number;
+  public initialVideoPosition?: number;
+  public finalVideoPosition?: number;
+  public durationWatched?: number;
+  public thumbnail?: string;
 
-  constructor(id: string, hostId: string, initialVideoId: string = 'L_LUpnjgPso') {
+  constructor(id: string, hostId: string, initialVideoId: string = 'L_LUpnjgPso', passwordHash?: string) {
     this.id = id;
     this.name = `Room ${id}`;
+    this.description = '';
+    this.isPublic = true;
+    this.participantLimit = 50;
     this.hostId = hostId;
     this.videoId = initialVideoId;
     this.videoTitle = 'Lofi Hip Hop Radio - Beats to Relax/Study to';
@@ -29,11 +51,21 @@ export class Room {
     this.socketToUser = new Map();
     this.requests = new Map();
     this.chatMessages = [];
+    this.playlist = [];
+    this.likes = new Set();
+    this.segments = [];
+    this.recentVideos = [];
+    this.passwordHash = passwordHash;
   }
 
-  /**
-   * Calculates the current live playback time in seconds
-   */
+  public finalizeSegments(): void {
+    if (this.currentSegmentStart !== undefined) {
+       const elapsed = (Date.now() - this.lastUpdated) / 1000;
+       this.segments.push({ start: this.currentSegmentStart, end: this.currentTime + elapsed });
+       this.currentSegmentStart = undefined;
+    }
+  }
+
   public getCalculatedCurrentTime(): number {
     if (this.playState === 'playing') {
       const elapsedSeconds = (Date.now() - this.lastUpdated) / 1000;
@@ -43,7 +75,6 @@ export class Room {
   }
 
   public addParticipant(participant: Participant): void {
-    // If room has no active host or host left, first joiner becomes host
     if (this.participants.size === 0 || !this.hostId) {
       this.hostId = participant.id;
       participant.updateRole('host');
@@ -60,16 +91,11 @@ export class Room {
     this.socketToUser.delete(participant.socketId);
     this.participants.delete(userId);
 
-    // If host was removed, auto-transfer host role to another participant if available
-    if (this.hostId === userId && this.participants.size > 0) {
-      const nextParticipant = Array.from(this.participants.values())[0];
-      this.hostId = nextParticipant.id;
-      nextParticipant.updateRole('host');
-      this.addChatMessage(
-        'system',
-        `Host role automatically transferred to ${nextParticipant.username}`,
-        'system'
-      );
+    if (this.hostId === userId) {
+      this.status = 'ended';
+      this.finalizeSegments();
+      this.endedAt = Date.now();
+      this.addChatMessage('system', 'Host left. Watch Party has ended.', 'system');
     }
 
     return participant;
@@ -85,16 +111,27 @@ export class Room {
     return this.participants.get(userId);
   }
 
+  public updateParticipantSocket(userId: string, newSocketId: string): void {
+    const participant = this.participants.get(userId);
+    if (!participant) return;
+
+    if (participant.socketId) {
+      this.socketToUser.delete(participant.socketId);
+    }
+    
+    participant.setSocketId(newSocketId);
+    this.socketToUser.set(newSocketId, userId);
+  }
+
+
   public setHost(newHostUserId: string, requesterUserId?: string): boolean {
     const target = this.participants.get(newHostUserId);
     if (!target) return false;
 
-    // Check requester permission (only current host or system can transfer host)
     if (requesterUserId && this.hostId !== requesterUserId) {
       return false;
     }
 
-    // Demote current host to moderator or participant
     const currentHost = this.participants.get(this.hostId);
     if (currentHost && currentHost.id !== newHostUserId) {
       currentHost.updateRole('moderator');
@@ -111,7 +148,6 @@ export class Room {
     const target = this.participants.get(targetUserId);
 
     if (!requester || !target) return false;
-    // Only Host can assign roles
     if (requester.role !== 'host') return false;
 
     if (newRole === 'host') {
@@ -130,14 +166,12 @@ export class Room {
     const requester = this.participants.get(requesterUserId);
     if (!requester) return { success: false, reason: 'Participant not found' };
 
-    // RBAC Validation: Host and Moderator can control playback directly
     if (!requester.canControlPlayback()) {
       return { success: false, reason: 'Permission denied. Host or Moderator role required.' };
     }
 
     const now = Date.now();
 
-    // If playState or video changes, save calculated current time before updating
     if (update.currentTime !== undefined) {
       this.currentTime = update.currentTime;
       this.lastUpdated = now;
@@ -204,7 +238,6 @@ export class Room {
 
     if (approved) {
       request.approve();
-      // Execute the requested change!
       if (request.type === 'change_video' && request.payload.videoId) {
         this.updatePlaybackState(
           { videoId: request.payload.videoId, videoTitle: request.payload.videoTitle },
@@ -256,7 +289,6 @@ export class Room {
     };
 
     this.chatMessages.push(msg);
-    // Keep last 100 messages
     if (this.chatMessages.length > 100) {
       this.chatMessages.shift();
     }
@@ -267,7 +299,22 @@ export class Room {
   public toState(): RoomState {
     return {
       id: this.id,
+      status: this.status,
+      isDeleted: this.isDeleted,
+      startedAt: this.startedAt,
+      endedAt: this.endedAt,
+      currentParticipantCount: this.participants.size,
+      likes: Array.from(this.likes),
       name: this.name,
+      description: this.description,
+      purpose: this.purpose,
+      segments: this.segments,
+      initialVideoPosition: this.initialVideoPosition,
+      finalVideoPosition: this.finalVideoPosition,
+      durationWatched: this.durationWatched,
+      thumbnail: this.thumbnail,
+      isPublic: this.isPublic,
+      participantLimit: this.participantLimit,
       hostId: this.hostId,
       videoId: this.videoId,
       videoTitle: this.videoTitle,
@@ -279,6 +326,9 @@ export class Room {
         .filter((r) => r.status === 'pending')
         .map((r) => r.toJSON()),
       chatMessages: this.chatMessages,
+      playlist: this.playlist,
+      recentVideos: this.recentVideos || [],
+      hasPassword: Boolean(this.passwordHash),
     };
   }
 }

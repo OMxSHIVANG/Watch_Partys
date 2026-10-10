@@ -9,12 +9,31 @@ const REACTION_EMOJIS = ['🔥', '👍', '👏', '😂', '❤️', '😮', '🎉
 export const Chat: React.FC = () => {
   const { roomState, sendMessage, sendReaction, userId } = useSocket();
   const [text, setText] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isAutoScrollPaused, setIsAutoScrollPaused] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const messages = roomState?.chatMessages || [];
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  // Determine if we should auto-scroll
+  const handleScroll = () => {
+    if (!containerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+    // If we are more than 50px away from the bottom, pause auto-scroll
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 50;
+    setIsAutoScrollPaused(!isNearBottom);
+  };
+
+  const scrollToBottom = (force = false) => {
+    if (containerRef.current) {
+      if (force || !isAutoScrollPaused) {
+        // Use a small timeout to let React render the DOM first
+        setTimeout(() => {
+          if (containerRef.current) {
+            containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' });
+          }
+        }, 50);
+      }
+    }
   };
 
   useEffect(() => {
@@ -26,6 +45,9 @@ export const Chat: React.FC = () => {
     if (!text.trim()) return;
     sendMessage(text);
     setText('');
+    // Force scroll to bottom when user sends a message
+    setIsAutoScrollPaused(false);
+    scrollToBottom(true);
   };
 
   const formatTime = (ts: number) => {
@@ -34,7 +56,7 @@ export const Chat: React.FC = () => {
   };
 
   return (
-    <div className="glass-panel rounded-2xl p-4 border border-slate-800 flex flex-col h-full min-h-[350px]">
+    <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800 flex flex-col h-full ">
       {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-800">
         <div className="flex items-center gap-2">
@@ -58,7 +80,7 @@ export const Chat: React.FC = () => {
       </div>
 
       {/* Messages Feed */}
-      <div className="flex-1 overflow-y-auto py-3 space-y-3 pr-1 text-xs">
+      <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto py-2 space-y-0.5 pr-2">
         {messages.length === 0 ? (
           <div className="text-center text-slate-500 py-8">No chat messages yet. Say hello! 👋</div>
         ) : (
@@ -77,30 +99,25 @@ export const Chat: React.FC = () => {
             }
 
             return (
-              <div
-                key={msg.id}
-                className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1`}
-              >
-                <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
-                  <span className="font-semibold text-slate-300">{msg.username}</span>
-                  <RoleBadge role={msg.userRole} showIcon={false} />
-                  <span>{formatTime(msg.timestamp)}</span>
+              <div key={msg.id} className="flex items-start gap-2 py-1 px-2 hover:bg-slate-800/50 -mx-2 rounded transition-colors">
+                <div className="flex-none pt-0.5">
+                  <span className="text-[9px] text-slate-500">{formatTime(msg.timestamp)}</span>
                 </div>
-
-                <div
-                  className={`px-3 py-2 rounded-2xl max-w-[85%] break-words shadow-sm ${
-                    isMe
-                      ? 'bg-rose-600 text-white rounded-tr-none'
-                      : 'bg-slate-900 border border-slate-800 text-slate-200 rounded-tl-none'
-                  }`}
-                >
-                  {msg.text}
+                <div className="flex-1 break-words leading-relaxed text-[13px]">
+                  <span className={`font-semibold mr-1.5 ${isMe ? 'text-rose-400' : 'text-slate-300'}`}>
+                    {msg.username}
+                  </span>
+                  <span className="inline-block translate-y-[2px] mr-1.5">
+                    <RoleBadge role={msg.userRole} showIcon={false} />
+                  </span>
+                  <span className="text-slate-100">
+                    {msg.text}
+                  </span>
                 </div>
               </div>
             );
           })
         )}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Message Input */}

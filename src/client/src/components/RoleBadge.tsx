@@ -25,7 +25,7 @@ export const RoleBadge: React.FC<RoleBadgeProps> = ({ role, showIcon = true }) =
       case 'participant':
         return {
           bg: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
-          label: 'MEMBER',
+          label: 'PARTICIPANT',
           icon: <User className="w-3 h-3 text-emerald-400" />,
         };
       case 'viewer':

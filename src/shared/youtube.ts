@@ -2,8 +2,9 @@
  * Extract YouTube video ID from various URL formats or raw ID string.
  * Examples:
  * - https://www.youtube.com/watch?v=dQw4w9WgXcQ
- * - https://youtu.be/dQw4w9WgXcQ
- * - https://www.youtube.com/embed/dQw4w9WgXcQ
+ * - https://m.youtube.com/watch?v=dQw4w9WgXcQ&feature=shared
+ * - https://youtu.be/dQw4w9WgXcQ?si=abcdef
+ * - https://www.youtube.com/shorts/dQw4w9WgXcQ
  * - dQw4w9WgXcQ
  */
 export function extractYouTubeId(urlOrId: string): string | null {
@@ -16,8 +17,8 @@ export function extractYouTubeId(urlOrId: string): string | null {
     return trimmed;
   }
 
-  // Regex for YouTube URLs
-  const urlRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+  // Regex for YouTube URLs (includes desktop, mobile, shorts, embed, parameters)
+  const urlRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
   const match = trimmed.match(urlRegex);
 
   if (match && match[1]) {

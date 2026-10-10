@@ -10,7 +10,8 @@
     "build:client": "vite build",
     "build:server": "tsc",
     "build": "npm run build:client && npm run build:server",
-    "start": "node dist/server/index.js"
+    "start": "node dist/server/index.js",
+    "db:reset": "node wipe-db.js"
   },
   "keywords": [
     "youtube",
@@ -24,19 +25,34 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/nodemailer": "^8.0.2",
+    "@types/uuid": "^10.0.0",
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.11.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.7",
+    "dotenv": "^16.6.1",
     "express": "^4.21.2",
+    "google-auth-library": "^11.2.0",
+    "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.475.0",
+    "mongoose": "^9.11.1",
+    "multer": "^2.4.0",
+    "nodemailer": "^10.0.16",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-player": "^3.4.0",
+    "react-router-dom": "^7.18.4",
     "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1"
+    "socket.io-client": "^4.8.1",
+    "uuid": "^14.0.2"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "@types/multer": "^2.3.0",
     "@types/node": "^22.13.4",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",

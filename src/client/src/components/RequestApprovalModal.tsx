@@ -16,7 +16,7 @@ export const RequestApprovalModal: React.FC = () => {
       {pendingRequests.map((req: ChangeRequestData) => (
         <div
           key={req.id}
-          className="glass-panel bg-slate-900/95 border-2 border-rose-500/40 rounded-2xl p-4 shadow-2xl animate-bounce-short"
+          className="bg-slate-900 bg-slate-900/95 border-2 border-rose-500/40 rounded-2xl p-4 shadow-2xl animate-bounce-short"
         >
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center shrink-0">

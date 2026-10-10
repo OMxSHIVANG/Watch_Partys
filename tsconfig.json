@@ -11,5 +11,6 @@
     "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx"
   },
-  "include": ["src/**/*"]
+  "include": ["src/server/**/*", "src/shared/**/*"],
+  "exclude": ["src/client/**/*"]
 }

@@ -11,7 +11,7 @@ export const ParticipantList: React.FC = () => {
   const participants = roomState?.participants || [];
 
   return (
-    <div className="glass-panel rounded-2xl p-4 border border-slate-800 flex flex-col h-full">
+    <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800 flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between pb-3 border-b border-slate-800">
         <div className="flex items-center gap-2">
@@ -71,7 +71,8 @@ export const ParticipantList: React.FC = () => {
                     onChange={(e) => assignRole(p.id, e.target.value as UserRole)}
                     className="bg-slate-950 border border-slate-800 text-[11px] text-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:border-rose-500"
                   >
-                    <option value="participant">Member</option>
+                    <option value="viewer">Viewer</option>
+                    <option value="participant">Participant</option>
                     <option value="moderator">Moderator</option>
                     <option value="host">Make Host</option>
                   </select>

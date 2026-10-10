@@ -1,88 +1,86 @@
-import fs from 'fs';
-import path from 'path';
-import { RoomState, ParticipantData, ChatMessage } from '../../shared/types';
-
-interface DBStructure {
-  rooms: Record<string, RoomState>;
-  participants: Record<string, ParticipantData[]>;
-  messages: Record<string, ChatMessage[]>;
-}
+import { RoomModel } from './models/Room';
+import { PlayState, ParticipantData, ChangeRequestData, ChatMessage, RoomState } from '../../shared/types';
+export type StoredRoom = RoomState & { passwordHash?: string };
 
 export class DatabaseService {
-  private filePath: string;
-  private data: DBStructure;
-
-  constructor(customPath?: string) {
-    const dataDir = path.join(process.cwd(), 'data');
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-
-    this.filePath = customPath || path.join(dataDir, 'watchparty_db.json');
-    this.data = this.loadFromFile();
+  constructor() {
+    // MongoDB connection is handled in index.ts via connectDB()
   }
 
-  private loadFromFile(): DBStructure {
+  public async saveRoom(roomState: StoredRoom): Promise<void> {
     try {
-      if (fs.existsSync(this.filePath)) {
-        const raw = fs.readFileSync(this.filePath, 'utf-8');
-        return JSON.parse(raw);
+      const { id, ...rest } = roomState;
+      
+      if (rest.status === 'live') {
+        await RoomModel.findOneAndUpdate(
+          { roomId: id, isDeleted: { $ne: true } },
+          { roomId: id, ...rest },
+          { upsert: true, new: true }
+        );
+      } else {
+        await RoomModel.findOneAndUpdate(
+          { roomId: id, isDeleted: { $ne: true } },
+          { roomId: id, ...rest },
+          { new: true }
+        );
       }
     } catch (err) {
-      console.error('[DatabaseService] Error reading database file:', err);
+      console.error('[DatabaseService] Error saving room:', err);
     }
-    return { rooms: {}, participants: {}, messages: {} };
   }
 
-  private persist(): void {
+  public async removeParticipant(roomId: string, userId: string): Promise<void> {
     try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), 'utf-8');
+      await RoomModel.findOneAndUpdate(
+        { roomId },
+        { $pull: { participants: { id: userId } } }
+      );
     } catch (err) {
-      console.error('[DatabaseService] Error saving database file:', err);
+      console.error('[DatabaseService] Error removing participant:', err);
     }
   }
 
-  public saveRoom(roomState: RoomState): void {
-    this.data.rooms[roomState.id] = roomState;
-    this.data.participants[roomState.id] = roomState.participants;
-    this.data.messages[roomState.id] = roomState.chatMessages;
-    this.persist();
+  public async saveMessage(roomId: string, msg: ChatMessage): Promise<void> {
+    try {
+      // Add message and keep only last 100
+      await RoomModel.findOneAndUpdate(
+        { roomId },
+        { 
+          $push: { 
+            chatMessages: {
+              $each: [msg],
+              $slice: -100
+            }
+          }
+        }
+      );
+    } catch (err) {
+      console.error('[DatabaseService] Error saving message:', err);
+    }
   }
 
-  public removeParticipant(roomId: string, userId: string): void {
-    if (this.data.participants[roomId]) {
-      this.data.participants[roomId] = this.data.participants[roomId].filter((p) => p.id !== userId);
+  public async markAllStaleRoomsAsEnded(): Promise<void> {
+    try {
+      await RoomModel.updateMany({ status: 'live' }, { $set: { status: 'ended', endedAt: Date.now() } });
+    } catch (err) {
+      console.error('[DatabaseService] Error cleaning up stale rooms:', err);
     }
-    if (this.data.rooms[roomId]) {
-      this.data.rooms[roomId].participants = this.data.rooms[roomId].participants.filter((p) => p.id !== userId);
-    }
-    this.persist();
   }
 
-  public saveMessage(roomId: string, msg: ChatMessage): void {
-    if (!this.data.messages[roomId]) {
-      this.data.messages[roomId] = [];
+  public async loadAllRooms(): Promise<any[]> {
+    try {
+      const rooms = await RoomModel.find({ status: 'live', isDeleted: { $ne: true } }).lean();
+      return rooms.map((r: any) => {
+        const { roomId, ...rest } = r;
+        return {
+          room: { id: roomId, ...rest },
+          participants: r.participants || [],
+          messages: r.chatMessages || []
+        };
+      });
+    } catch (err) {
+      console.error('[DatabaseService] Error loading all rooms:', err);
+      return [];
     }
-    this.data.messages[roomId].push(msg);
-    // Keep last 100 messages
-    if (this.data.messages[roomId].length > 100) {
-      this.data.messages[roomId].shift();
-    }
-    this.persist();
-  }
-
-  public loadAllRooms(): Array<{
-    room: RoomState;
-    participants: ParticipantData[];
-    messages: ChatMessage[];
-  }> {
-    const result = [];
-    for (const roomId of Object.keys(this.data.rooms)) {
-      const room = this.data.rooms[roomId];
-      const participants = this.data.participants[roomId] || room.participants || [];
-      const messages = this.data.messages[roomId] || room.chatMessages || [];
-      result.push({ room, participants, messages });
-    }
-    return result;
   }
 }

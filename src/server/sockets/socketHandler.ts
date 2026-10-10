@@ -1,21 +1,45 @@
 import { Server, Socket } from 'socket.io';
+import jwt from 'jsonwebtoken';
 import { RoomManager } from '../models/RoomManager';
-import { extractYouTubeId } from '../utils/youtube';
+import { extractYouTubeId } from '../../shared/youtube';
 import { RequestType, UserRole } from '../../shared/types';
+import { getJwtSecret } from '../auth/authRouter';
 
 export function setupSocketHandlers(io: Server, roomManager: RoomManager): void {
+  // Authentication Middleware
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (!token) {
+      return next(new Error('Authentication error: Missing token'));
+    }
+    try {
+      const decoded = jwt.verify(token, getJwtSecret()) as { userId: string; email: string };
+      socket.data.userId = decoded.userId;
+      next();
+    } catch (err) {
+      return next(new Error('Authentication error: Invalid token'));
+    }
+  });
+
   io.on('connection', (socket: Socket) => {
-    console.log(`[Socket] Client connected: ${socket.id}`);
 
     // 1. Join Room
-    socket.on('join_room', ({ roomId, username, userId }: { roomId: string; username: string; userId?: string }) => {
+    socket.on('join_room', (data: any) => {
+      const { roomId, username, password, name, description, thumbnail, isPublic, participantLimit } = data;
       if (!roomId || !username) {
         socket.emit('error_message', { message: 'Room ID and Username are required' });
         return;
       }
 
-      const effectiveUserId = userId || `user_${Math.random().toString(36).substring(2, 9)}`;
-      const { room, participant } = roomManager.joinRoom(roomId, effectiveUserId, socket.id, username);
+      const effectiveUserId = socket.data.userId;
+      const options = { password, name, description, thumbnail, isPublic, participantLimit };
+      const result = roomManager.joinRoom(roomId, effectiveUserId, socket.id, username, options);
+      if (!result.success || !result.room || !result.participant) {
+        socket.emit('error_message', { message: result.reason || 'Failed to join room' });
+        return;
+      }
+
+      const { room, participant } = result;
 
       socket.join(room.id);
 
@@ -120,7 +144,9 @@ export function setupSocketHandlers(io: Server, roomManager: RoomManager): void 
         if (!room) return;
 
         const participant = room.getParticipantBySocket(socket.id);
-        if (!participant) return;
+        if (!participant) { 
+          return; 
+        }
 
         const cleanId = extractYouTubeId(videoId);
         if (!cleanId) {
@@ -316,16 +342,170 @@ export function setupSocketHandlers(io: Server, roomManager: RoomManager): void 
     });
 
     // 14. Disconnect Handling
+    
+    
+    socket.on('add_to_playlist', ({ roomId, videoId, title }: { roomId: string; videoId: string; title: string }) => {
+      const room = roomManager.getRoom(roomId);
+      if (!room) return;
+      const participant = room.participants.get(socket.data.userId);
+      if (!participant) return;
+
+      const newItem = {
+        id: Math.random().toString(36).substring(2, 9),
+        videoId,
+        title,
+        addedBy: { userId: participant.id, username: participant.username },
+        votes: [participant.id],
+        createdAt: Date.now()
+      };
+      room.playlist.push(newItem);
+      
+      // Sort by votes (descending), then time (ascending)
+      room.playlist.sort((a, b) => {
+        if (b.votes.length !== a.votes.length) return b.votes.length - a.votes.length;
+        return a.createdAt - b.createdAt;
+      });
+      
+      io.to(roomId).emit('sync_state', room.toState());
+      roomManager.saveRoomState(room);
+    });
+
+    socket.on('vote_playlist', ({ roomId, itemId }: { roomId: string; itemId: string }) => {
+      const room = roomManager.getRoom(roomId);
+      if (!room) return;
+      
+      const item = room.playlist.find(i => i.id === itemId);
+      if (!item) return;
+
+      const userId = socket.data.userId;
+      const voteIndex = item.votes.indexOf(userId);
+      if (voteIndex === -1) {
+        item.votes.push(userId); // Add vote
+      } else {
+        item.votes.splice(voteIndex, 1); // Remove vote
+      }
+
+      // Resort playlist
+      room.playlist.sort((a, b) => {
+        if (b.votes.length !== a.votes.length) return b.votes.length - a.votes.length;
+        return a.createdAt - b.createdAt;
+      });
+
+      io.to(roomId).emit('sync_state', room.toState());
+      roomManager.saveRoomState(room);
+    });
+
+    socket.on('reorder_playlist', ({ roomId, newPlaylist }: { roomId: string; newPlaylist: any[] }) => {
+      const room = roomManager.getRoom(roomId);
+      if (!room) return;
+      const p = room.participants.get(socket.data.userId);
+      if (!p || p.role !== 'host') return;
+
+      room.playlist = newPlaylist;
+      io.to(roomId).emit('sync_state', room.toState());
+      roomManager.saveRoomState(room);
+    });
+
+    socket.on('remove_from_playlist', ({ roomId, itemId }: { roomId: string; itemId: string }) => {
+      const room = roomManager.getRoom(roomId);
+      if (!room) return;
+      const p = room.participants.get(socket.data.userId);
+      if (!p || (p.role !== 'host' && p.role !== 'moderator')) return;
+
+      room.playlist = room.playlist.filter(i => i.id !== itemId);
+      io.to(roomId).emit('sync_state', room.toState());
+      roomManager.saveRoomState(room);
+    });
+
+    socket.on('play_playlist_item', ({ roomId, itemId }: { roomId: string; itemId: string }) => {
+      const room = roomManager.getRoom(roomId);
+      if (!room) return;
+      const p = room.participants.get(socket.data.userId);
+      if (!p || (p.role !== 'host' && p.role !== 'moderator')) return;
+
+      const itemIndex = room.playlist.findIndex(i => i.id === itemId);
+      if (itemIndex === -1) return;
+
+      const item = room.playlist[itemIndex];
+      room.videoId = item.videoId;
+      room.videoTitle = item.title;
+      room.currentTime = 0;
+      room.playState = 'playing';
+      room.lastUpdated = Date.now();
+      
+      // Remove from playlist
+      room.playlist.splice(itemIndex, 1);
+
+      // Add to recent videos
+      const recentItem = { ...item, playedAt: Date.now() };
+      room.recentVideos.unshift(recentItem);
+      if (room.recentVideos.length > 20) room.recentVideos.pop();
+
+      io.to(roomId).emit('sync_state', room.toState());
+      io.to(roomId).emit('change_video', { videoId: item.videoId, videoTitle: item.title });
+      roomManager.saveRoomState(room);
+    });
+
+    socket.on('play_next', ({ roomId }: { roomId: string }) => {
+      const room = roomManager.getRoom(roomId);
+      if (!room) return;
+      const p = room.participants.get(socket.data.userId);
+      if (!p || (p.role !== 'host' && p.role !== 'moderator')) return;
+
+      if (room.playlist.length === 0) return;
+
+      // Since playlist is always sorted by votes, index 0 is the highest voted!
+      const item = room.playlist[0];
+      
+      room.videoId = item.videoId;
+      room.videoTitle = item.title;
+      room.currentTime = 0;
+      room.playState = 'playing';
+      room.lastUpdated = Date.now();
+      
+      // Remove from playlist
+      room.playlist.shift();
+
+      // Add to recent videos
+      const recentItem = { ...item, playedAt: Date.now() };
+      room.recentVideos.unshift(recentItem);
+      if (room.recentVideos.length > 20) room.recentVideos.pop();
+
+      io.to(roomId).emit('sync_state', room.toState());
+      io.to(roomId).emit('change_video', { videoId: item.videoId, videoTitle: item.title });
+      roomManager.saveRoomState(room);
+    });
+
     socket.on('disconnect', () => {
-      console.log(`[Socket] Client disconnected: ${socket.id}`);
       const result = roomManager.handleDisconnect(socket.id);
       if (result && result.room) {
-        io.to(result.room.id).emit('user_left', {
-          username: result.participant?.username || 'User',
-          userId: result.participant?.id,
-          participants: result.room.toState().participants,
+        const room = result.room;
+        const participant = result.participant;
+        
+        io.to(room.id).emit('user_left', {
+          username: participant?.username || 'User',
+          userId: participant?.id,
+          participants: room.toState().participants,
         });
-        io.to(result.room.id).emit('sync_state', result.room.toState());
+        io.to(room.id).emit('sync_state', room.toState());
+        
+        if (participant?.role === 'host') {
+          setTimeout(() => {
+            const currentRoom = roomManager.getRoom(room.id);
+            if (currentRoom && currentRoom.status === 'live') {
+               const p = currentRoom.getParticipant(participant.id);
+               if (p && !p.isOnline) {
+                  currentRoom.status = 'ended';
+                  currentRoom.finalizeSegments();
+                  if (!currentRoom.endedAt) currentRoom.endedAt = Date.now();
+                  currentRoom.addChatMessage('system', 'Host disconnected. Watch Party ended.', 'system');
+                  io.to(currentRoom.id).emit('sync_state', currentRoom.toState());
+                  roomManager.saveRoomState(currentRoom);
+                  roomManager.evictRoom(currentRoom.id);
+               }
+            }
+          }, 15000);
+        }
       }
     });
   });

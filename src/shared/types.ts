@@ -44,8 +44,23 @@ export interface ChatMessage {
 export interface RoomState {
   id: string;
   name: string;
+  description?: string;
+  purpose?: string;
+  initialVideoPosition?: number;
+  finalVideoPosition?: number;
+  durationWatched?: number;
+  isDeleted?: boolean;
+  segments?: Array<{start: number, end: number}>;
+  isPublic: boolean;
+  participantLimit: number;
+  status?: 'live' | 'ended';
+  startedAt?: number;
+  endedAt?: number;
+  currentParticipantCount?: number;
+  likes?: string[];
   hostId: string;
   videoId: string;
+  thumbnail?: string;
   videoTitle?: string;
   playState: PlayState;
   currentTime: number;
@@ -53,6 +68,22 @@ export interface RoomState {
   participants: ParticipantData[];
   requests: ChangeRequestData[];
   chatMessages: ChatMessage[];
+  playlist: PlaylistItem[];
+  recentVideos: PlaylistItem[];
+  hasPassword?: boolean;
+}
+
+export interface PlaylistItem {
+  id: string;
+  videoId: string;
+  title: string;
+  addedBy: {
+    userId: string;
+    username: string;
+  };
+  votes: string[]; // Array of userIds who voted
+  createdAt: number;
+  playedAt?: number;
 }
 
 export interface ReactionPayload {
@@ -62,3 +93,4 @@ export interface ReactionPayload {
   emoji: string;
   timestamp: number;
 }
+
