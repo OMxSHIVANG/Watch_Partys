@@ -6,7 +6,7 @@ dotenv.config();
 export const connectDB = async () => {
   const primaryURI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/watchparty';
   try {
-    await mongoose.connect(primaryURI, { serverSelectionTimeoutMS: 5000 });
+    await mongoose.connect(primaryURI, { serverSelectionTimeoutMS: 10000 });
     console.log('[MongoDB] Connected successfully');
   } catch (error) {
     if (primaryURI.includes('127.0.0.1') || primaryURI.includes('localhost')) {
