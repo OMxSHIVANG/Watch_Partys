@@ -37,14 +37,23 @@ export const ReplayPage: React.FC = () => {
     fetchReplay();
   }, [roomId]);
 
+  const [actualDuration, setActualDuration] = useState<number>(0);
+
+  const hasMultipleVideos = useMemo(() => {
+    if (!room?.segments || room.segments.length <= 1) return false;
+    const firstId = room.segments[0]?.videoId;
+    return room.segments.some((s: any) => s.videoId && s.videoId !== firstId);
+  }, [room]);
+
   const totalDuration = useMemo(() => {
+    if (actualDuration > 0) return actualDuration;
     if (!room) return 0;
     if (room.segments && room.segments.length > 0) {
       const sum = room.segments.reduce((acc: number, seg: any) => acc + Math.max(0, (seg.end - seg.start)), 0);
       if (sum > 0) return sum;
     }
     return room.durationWatched || 180;
-  }, [room]);
+  }, [room, actualDuration]);
 
   const currentVideoId = useMemo(() => {
     if (!room) return '';
@@ -68,13 +77,12 @@ export const ReplayPage: React.FC = () => {
         player.seekTo(timeInSeconds, 'seconds');
       } else if ('currentTime' in player) {
         player.currentTime = timeInSeconds;
-      } else if (player.getInternalPlayer) {
-        const internal = player.getInternalPlayer();
-        if (internal && typeof internal.seekTo === 'function') {
-          internal.seekTo(timeInSeconds, true);
-        } else if (internal && 'currentTime' in internal) {
-          internal.currentTime = timeInSeconds;
-        }
+      }
+      const internal = player.getInternalPlayer?.();
+      if (internal && typeof internal.seekTo === 'function') {
+        internal.seekTo(timeInSeconds, true);
+      } else if (internal && 'currentTime' in internal) {
+        internal.currentTime = timeInSeconds;
       }
     } catch (err) {
       console.warn('Seek error:', err);
@@ -84,10 +92,14 @@ export const ReplayPage: React.FC = () => {
   const seekToTimelineTime = (targetTime: number) => {
     if (isNaN(targetTime)) return;
     const clampedTime = Math.max(0, Math.min(totalDuration, targetTime));
+    isSeekingRef.current = true;
     setPlayedSeconds(clampedTime);
 
-    if (!room || !room.segments || room.segments.length === 0) {
+    if (!hasMultipleVideos) {
       seekPlayer(clampedTime);
+      setTimeout(() => {
+        isSeekingRef.current = false;
+      }, 800);
       return;
     }
 
@@ -108,16 +120,16 @@ export const ReplayPage: React.FC = () => {
         if (previousSegment && newSegment && previousSegment.videoId && newSegment.videoId && previousSegment.videoId !== newSegment.videoId) {
           pendingSeekTime.current = ytTime;
         } else {
-          isSeekingRef.current = true;
           seekPlayer(ytTime);
-          setTimeout(() => {
-            isSeekingRef.current = false;
-          }, 600);
         }
         break;
       }
       accum += dur;
     }
+
+    setTimeout(() => {
+      isSeekingRef.current = false;
+    }, 800);
   };
 
   const handleSeek = (newWatchPartyTime: number) => {
@@ -129,9 +141,14 @@ export const ReplayPage: React.FC = () => {
   };
 
   const handleTimeProgress = (ytTime: number) => {
-    if (!room) return;
-    if (!room.segments || room.segments.length === 0) {
-      if (!isScrubbing) setPlayedSeconds(ytTime);
+    if (!room || isSeekingRef.current || isScrubbing) return;
+    if (typeof ytTime !== 'number' || isNaN(ytTime) || ytTime < 0) return;
+
+    if (!hasMultipleVideos) {
+      setPlayedSeconds(ytTime);
+      if (totalDuration > 0 && ytTime >= totalDuration - 0.5) {
+        setIsPlaying(false);
+      }
       return;
     }
 
@@ -157,28 +174,14 @@ export const ReplayPage: React.FC = () => {
       }
     }
 
-    if (ytTime > currentSegment.end + 0.3 && currentSegmentIndex >= room.segments.length - 1) {
-      seekPlayer(currentSegment.end);
-      setIsPlaying(false);
-      setPlayedSeconds(totalDuration);
-      return;
+    let accum = 0;
+    for (let i = 0; i < currentSegmentIndex; i++) {
+      accum += Math.max(0, room.segments[i].end - room.segments[i].start);
     }
-
-    if (ytTime < currentSegment.start - 0.5) {
-      seekPlayer(currentSegment.start);
-      return;
-    }
-
-    if (!isScrubbing) {
-      let accum = 0;
-      for (let i = 0; i < currentSegmentIndex; i++) {
-        accum += Math.max(0, room.segments[i].end - room.segments[i].start);
-      }
-      const segmentProgress = Math.max(0, ytTime - currentSegment.start);
-      const computedPlayed = Math.min(totalDuration, accum + segmentProgress);
-      if (!isNaN(computedPlayed)) {
-        setPlayedSeconds(computedPlayed);
-      }
+    const segmentProgress = Math.max(0, ytTime - currentSegment.start);
+    const computedPlayed = Math.min(totalDuration, accum + segmentProgress);
+    if (!isNaN(computedPlayed)) {
+      setPlayedSeconds(computedPlayed);
     }
   };
 
@@ -238,11 +241,17 @@ export const ReplayPage: React.FC = () => {
             <ReactPlayer 
               ref={playerRef}
               src={`https://www.youtube.com/watch?v=${currentVideoId}`}
+              url={`https://www.youtube.com/watch?v=${currentVideoId}`}
               width="100%"
               height="100%"
               playing={isPlaying}
               muted={muted}
               controls={false}
+              onDuration={(dur: number) => {
+                if (typeof dur === 'number' && dur > 0) {
+                  setActualDuration(dur);
+                }
+              }}
               config={{
                 youtube: {
                   start: room.segments && room.segments.length > 0 ? Math.floor(room.segments[0].start) : 0,
@@ -253,10 +262,8 @@ export const ReplayPage: React.FC = () => {
                 if (pendingSeekTime.current !== null && !isNaN(pendingSeekTime.current)) {
                    isSeekingRef.current = true;
                    seekPlayer(pendingSeekTime.current);
-                   setTimeout(() => { isSeekingRef.current = false; }, 600);
+                   setTimeout(() => { isSeekingRef.current = false; }, 800);
                    pendingSeekTime.current = null;
-                } else if (currentSegmentIndex === 0 && room.segments && room.segments.length > 0) {
-                   seekPlayer(room.segments[0].start);
                 }
               }}
               onTimeUpdate={(e: React.SyntheticEvent<HTMLVideoElement>) => {
