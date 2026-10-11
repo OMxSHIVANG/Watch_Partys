@@ -83,8 +83,10 @@ export const Controls: React.FC = () => {
     if (canControl && !isStreamEnded) {
       const curTime = typeof window.ytPlayer?.getCurrentTime === 'function' ? window.ytPlayer.getCurrentTime() : liveEdgeTime;
       if (isPlaying) {
+        window.ytPlayer?.pauseVideo?.();
         pauseVideo(curTime);
       } else {
+        window.ytPlayer?.playVideo?.();
         playVideo(curTime);
       }
       return;
@@ -108,6 +110,7 @@ export const Controls: React.FC = () => {
   const handleSkip = (seconds: number) => {
     if (canControl && !isStreamEnded) {
       const newTime = Math.max(0, sliderValue + seconds);
+      window.ytPlayer?.seekTo?.(newTime, true);
       seekVideo(newTime);
       return;
     }
@@ -141,6 +144,7 @@ export const Controls: React.FC = () => {
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const targetTime = parseFloat(e.target.value);
     if (canControl && !isStreamEnded) {
+      window.ytPlayer?.seekTo?.(targetTime, true);
       seekVideo(targetTime);
       window.isDvrMode = false;
     } else {

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSocket } from '../context/SocketContext';
-import { Pause, Play, PlaySquare } from 'lucide-react';
+import { PlaySquare } from 'lucide-react';
 
 declare global {
   interface Window {
@@ -371,17 +371,41 @@ export const VideoPlayer: React.FC = () => {
     );
   }
 
+  const handleScreenClick = () => {
+    if (!window.ytPlayer) return;
+    const state = typeof window.ytPlayer.getPlayerState === 'function' ? window.ytPlayer.getPlayerState() : -1;
+    if (canControl && roomState?.status !== 'ended') {
+      const curTime = typeof window.ytPlayer.getCurrentTime === 'function' ? window.ytPlayer.getCurrentTime() : roomState?.currentTime || 0;
+      if (state === 1) {
+        window.ytPlayer.pauseVideo?.();
+        pauseVideo(curTime);
+      } else {
+        window.ytPlayer.playVideo?.();
+        playVideo(curTime);
+      }
+    } else {
+      if (state === 1) {
+        window.ytPlayer.pauseVideo?.();
+        if (roomState?.status !== 'ended') {
+          window.isDvrMode = true;
+          setIsDvrMode(true);
+        }
+      } else {
+        window.ytPlayer.playVideo?.();
+      }
+    }
+  };
+
   return (
     <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 shadow-2xl">
-      <div id="youtube-iframe-container" className="w-full h-full" />
+      <div id="youtube-iframe-container" className="w-full h-full pointer-events-none" />
 
-      {/* Host Paused Badge for Viewers when at Live Edge */}
-      {!canControl && !isDvrMode && roomState?.playState === 'paused' && (
-        <div className="absolute top-4 right-4 z-20 bg-slate-900/90 border border-amber-500/40 text-amber-400 px-3 py-1.5 rounded-xl flex items-center gap-2 shadow-xl backdrop-blur-sm animate-in fade-in duration-200">
-          <Pause className="w-3.5 h-3.5 fill-current" />
-          <span className="text-[11px] font-bold uppercase tracking-wider">Host Paused Live</span>
-        </div>
-      )}
+      {/* Transparent Click Overlay to Play/Pause on video click without YouTube popup buttons */}
+      <div 
+        onClick={handleScreenClick} 
+        className="absolute inset-0 z-10 cursor-pointer" 
+        title="Click to Play / Pause"
+      />
 
       {/* Video Player Error Alert */}
       {playerError && (
@@ -398,7 +422,7 @@ export const VideoPlayer: React.FC = () => {
       {/* Video Overlay Info */}
       <div 
         onClick={isDvrMode ? jumpToLive : undefined}
-        className={`absolute top-4 left-4 z-10 px-3 py-1.5 rounded-lg border flex items-center gap-3 shadow-lg transition-colors ${
+        className={`absolute top-4 left-4 z-20 px-3 py-1.5 rounded-lg border flex items-center gap-3 shadow-lg transition-colors ${
           isDvrMode 
             ? "bg-slate-800/90 hover:bg-slate-700/90 border-slate-700 cursor-pointer" 
             : "bg-slate-900 border-slate-700/50 cursor-default"
