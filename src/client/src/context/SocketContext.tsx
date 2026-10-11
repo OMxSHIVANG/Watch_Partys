@@ -70,6 +70,15 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     newSocket.on('sync_state', (state: RoomState) => {
+      if (state.status === 'ended') {
+        setRoomState((prev: RoomState | null) => {
+          if (!prev) return null;
+          return { ...state, playState: 'paused' };
+        });
+        setUserRole('viewer');
+        return;
+      }
+
       setRoomState(state);
       setStateReceivedAt(Date.now());
       setRoomId(state.id);
@@ -78,8 +87,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const me = state.participants.find((p: ParticipantData) => p.id === userId);
       if (me) {
         setUserRole(me.role);
-      } else if (state.status === 'ended') {
-        setUserRole('viewer');
       }
     });
 
@@ -198,11 +205,22 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   }, [socket, roomId, username, userId]);
 
+  const clearRoomQueryParam = () => {
+    if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('room')) {
+        url.searchParams.delete('room');
+        window.history.replaceState({}, '', url.pathname + (url.search || ''));
+      }
+    }
+  };
+
   const leaveRoom = () => {
     if (!socket || !roomId) return;
     socket.emit('leave_room', { roomId });
     setRoomState(null);
     setRoomId('');
+    clearRoomQueryParam();
   };
 
   const endRoom = () => {
@@ -210,6 +228,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     socket.emit('end_room', { roomId });
     setRoomState(null);
     setRoomId('');
+    clearRoomQueryParam();
   };
 
   const playVideo = (time?: number) => {

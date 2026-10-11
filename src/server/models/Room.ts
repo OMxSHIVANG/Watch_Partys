@@ -186,6 +186,10 @@ export class Room {
     const requester = this.participants.get(requesterUserId);
     if (!requester) return { success: false, reason: 'Participant not found' };
 
+    if (this.status === 'ended') {
+      return { success: false, reason: 'Live stream has ended. Broadcast controls are disabled.' };
+    }
+
     if (!requester.canControlPlayback()) {
       return { success: false, reason: 'Permission denied. Host or Moderator role required.' };
     }

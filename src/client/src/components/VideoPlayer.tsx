@@ -88,10 +88,12 @@ export const VideoPlayer: React.FC = () => {
         videoId: initialId,
         playerVars: {
           autoplay: 1,
-          controls: canControl ? 1 : 0, // Hide native controls for participants to enforce RBAC!
+          controls: 0, // Clean embedded view: hide native YouTube play buttons, length bar, and control overlays
           modestbranding: 1,
           rel: 0,
           enablejsapi: 1,
+          disablekb: 1,
+          fs: 0,
         },
         events: {
           onReady: (event: any) => {
@@ -156,9 +158,9 @@ export const VideoPlayer: React.FC = () => {
         ? (roomState.currentTime || 0) + Math.max(0, (Date.now() - (stateReceivedAt || Date.now())) / 1000)
         : (roomState.currentTime || 0);
 
-      if (userRole === 'host') {
-        // HOST: Do not seek or call seekVideo in a continuous interval loop.
-        // The host's player is the master reference.
+      if (userRole === 'host' || roomState.status === 'ended') {
+        // HOST or ENDED STREAM: Do not seek or call seekVideo in a continuous interval loop.
+        // The host's player is the master reference, and ended streams allow free viewer local replay.
         return;
       }
 
@@ -244,9 +246,9 @@ export const VideoPlayer: React.FC = () => {
     const { canControl, userRole, playVideo, pauseVideo, playNext, roomState } = stateRef.current;
     const playerState = event.data;
 
-    if (!canControl) {
-      // If viewer was at live edge and host is paused, don't let them auto-play past the live edge
-      if (!window.isDvrMode && roomState?.playState === 'paused') {
+    if (!canControl || roomState?.status === 'ended') {
+      // If viewer was at live edge and host is paused, don't let them auto-play past the live edge (only in active live streams)
+      if (roomState?.status !== 'ended' && !window.isDvrMode && roomState?.playState === 'paused') {
         if (playerState === 1 || playerState === 3) {
           remoteActionUntil.current = Date.now() + 1200;
           playerRef.current?.pauseVideo();
@@ -255,7 +257,7 @@ export const VideoPlayer: React.FC = () => {
           }
         }
       }
-      return; // Viewer local playback does not affect room broadcast
+      return; // Viewer / replay local playback does not affect room broadcast
     }
 
     // Host / Moderator:
@@ -305,9 +307,9 @@ export const VideoPlayer: React.FC = () => {
       return;
     }
 
-    // HOST: Host is the source of truth for playback.
-    // Never overwrite the host's seek position with roomState updates.
-    if (userRole === 'host') {
+    // HOST & ENDED STREAM: Host is source of truth during broadcast, and ended stream allows free local replay.
+    // Never overwrite the seek position or force pause when state.status === 'ended'.
+    if (userRole === 'host' || state.status === 'ended') {
       return;
     }
 

@@ -14,7 +14,7 @@ export const Controls: React.FC = () => {
   const canControl = isHost || userRole === 'moderator';
   const isPlaying = roomState?.playState === 'playing';
   const [liveEdgeTime, setLiveEdgeTime] = useState(0);
-  const [videoDuration, setVideoDuration] = useState(7200);
+  const [videoDuration, setVideoDuration] = useState(0);
   const [localDisplayTime, setLocalDisplayTime] = useState(0);
   const [isDvrMode, setIsDvrMode] = useState(false);
   const [localPlayerState, setLocalPlayerState] = useState<number>(1);
@@ -27,6 +27,9 @@ export const Controls: React.FC = () => {
     roomState?.durationWatched || 0,
     videoDuration || 0
   );
+  const totalDisplayDuration = isStreamEnded 
+    ? (maxRecordedDuration || videoDuration || 0)
+    : (videoDuration > 0 ? videoDuration : (liveEdgeTime || 0));
 
   React.useEffect(() => {
     const interval = setInterval(() => {
@@ -258,19 +261,19 @@ export const Controls: React.FC = () => {
             {!canControl && !isStreamEnded && (
               <div 
                 className="absolute h-1.5 bg-rose-500/30 rounded-lg pointer-events-none" 
-                style={{ width: `${Math.min((liveEdgeTime / (videoDuration || 7200)) * 100, 100)}%`, zIndex: 0 }}
+                style={{ width: `${Math.min((liveEdgeTime / (totalDisplayDuration || 1)) * 100, 100)}%`, zIndex: 0 }}
               />
             )}
             <input
               type="range"
               min={0}
-              max={isStreamEnded ? (maxRecordedDuration || videoDuration || 7200) : canControl ? (videoDuration || 7200) : (liveEdgeTime || 1)}
+              max={isStreamEnded ? (totalDisplayDuration || 1) : canControl ? (totalDisplayDuration || 1) : (liveEdgeTime || 1)}
               value={sliderValue}
               onChange={handleSeekChange}
               className={`relative z-10 flex-1 h-2 rounded-lg appearance-none outline-none bg-slate-800 cursor-pointer accent-rose-500 hover:accent-rose-400`}
             />
           </div>
-          <span className="text-xs font-mono text-slate-500 w-12">{formatTime(isStreamEnded ? maxRecordedDuration : canControl ? videoDuration : liveEdgeTime)}</span>
+          <span className="text-xs font-mono text-slate-500 w-12">{formatTime(totalDisplayDuration)}</span>
         </div>
       </div>
 

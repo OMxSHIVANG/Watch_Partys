@@ -120,6 +120,7 @@ export function setupSocketHandlers(io: Server, roomManager: RoomManager): void 
         roomId: room.id,
       });
       io.to(room.id).emit('sync_state', room.toState());
+      socket.leave(room.id);
     });
 
     // 3. Playback Controls - Play
