@@ -140,3 +140,4 @@ npm start
 
 ## 📝 License
 MIT License. Free for educational and assignment evaluation purposes.
+# Watch_Partys
