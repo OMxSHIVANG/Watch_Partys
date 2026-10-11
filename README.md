@@ -6,8 +6,7 @@
 
 ## 🚀 Live Deployment & Demo
 
-- **Live App URL**: [https://watchparty-production.onrender.com](https://watchparty-production.onrender.com) *(Update with your deployed URL)*
-- **Health Check API**: `GET /api/health`
+- **Live App URL**: https://watch-partys.onrender.com
 
 ---
 
