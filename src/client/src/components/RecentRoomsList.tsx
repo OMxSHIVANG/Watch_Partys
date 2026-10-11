@@ -67,7 +67,9 @@ export const RecentRoomsList: React.FC = () => {
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
-        {rooms.map(room => {
+        {rooms
+          .filter((room, index, self) => index === self.findIndex((r) => r.hostId === room.hostId))
+          .map(room => {
           const date = new Date(room.endedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
           return (
             <div key={room.id} className="relative">

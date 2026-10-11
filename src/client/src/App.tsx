@@ -13,7 +13,7 @@ import { Playlist } from './components/Playlist';
 import { RecentVideos } from './components/RecentVideos';
 import { RequestApprovalModal } from './components/RequestApprovalModal';
 import { EmojiReactions } from './components/EmojiReactions';
-import { AlertCircle, X, Loader2, MessageSquare, Users } from 'lucide-react';
+import { AlertCircle, X, Loader2, Users } from 'lucide-react';
 import { ProfilePage } from './components/ProfilePage';
 import { ReplayPage } from './components/ReplayPage';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useSocket } from '../context/SocketContext';
 import { PlaylistItem } from '../../../shared/types';
+import { extractYouTubeId } from '../../../shared/youtube';
 import { ListVideo, ThumbsUp, Trash2, PlayCircle, Plus } from 'lucide-react';
 
 export const Playlist: React.FC = () => {
@@ -10,18 +11,14 @@ export const Playlist: React.FC = () => {
   const playlist = roomState?.playlist || [];
   const isPrivileged = userRole === 'host' || userRole === 'moderator';
 
-  const extractVideoId = (url: string) => {
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-    const match = url.match(regExp);
-    return match && match[2].length === 11 ? match[2] : url; // fallback to raw string if they pasted an ID
-  };
-
   const handleAdd = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputUrl.trim()) return;
-    const vId = extractVideoId(inputUrl);
-    addToPlaylist(vId, 'Added Video');
-    setInputUrl('');
+    const vId = extractYouTubeId(inputUrl);
+    if (vId) {
+      addToPlaylist(vId, 'Added Video');
+      setInputUrl('');
+    }
   };
 
   return (

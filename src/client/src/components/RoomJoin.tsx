@@ -3,11 +3,13 @@ import { useSocket } from '../context/SocketContext';
 import { useAuth } from '../context/AuthContext';
 import { LiveRoomsList } from './LiveRoomsList';
 import { RecentRoomsList } from './RecentRoomsList';
+
 import { PlaySquare, Users, Wand2, Settings2, Loader2 } from 'lucide-react';
+import { extractYouTubeId } from '../../../shared/youtube';
 
 export const RoomJoin: React.FC = () => {
   const { user } = useAuth();
-  const { joinRoom, errorMessage, clearErrorMessage, roomState } = useSocket();
+  const { joinRoom, errorMessage, clearErrorMessage } = useSocket();
 
   const [isJoinMode, setIsJoinMode] = useState(true);
   const [roomId, setRoomId] = useState('');
@@ -75,7 +77,7 @@ export const RoomJoin: React.FC = () => {
           user?.displayName || 'Guest', 
           {
             password,
-            videoId: videoId.trim() || undefined,
+            videoId: videoId.trim() ? (extractYouTubeId(videoId.trim()) || videoId.trim()) : undefined,
             name: roomName.trim() || `Room ${code}`,
             description: description.trim(),
             isPublic,
@@ -262,13 +264,14 @@ export const RoomJoin: React.FC = () => {
         {/* Right Column: Live Rooms & Recent Rooms */}
         <div className="h-full flex flex-col">
           <div className="flex-1 min-h-[300px]">
+             <RecentRoomsList />
              <LiveRoomsList onSelectRoom={(id, isPub, hasPwd) => {
                setIsJoinMode(true);
                setRoomId(id);
                if (hasPwd) setPassword('');
              }} />
           </div>
-          <div className="shrink-0 mt-6">
+          <div className="shrink-0 h-[45%] mt-6">
              <RecentRoomsList />
           </div>
         </div>

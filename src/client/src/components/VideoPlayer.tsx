@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useSocket } from '../context/SocketContext';
+import { Pause, Play, PlaySquare } from 'lucide-react';
 
 declare global {
   interface Window {
     YT: any;
+    ytPlayer: any;
+    isDvrMode: boolean;
     onYouTubeIframeAPIReady: () => void;
   }
 }
@@ -11,7 +14,7 @@ declare global {
 export const VideoPlayer: React.FC = () => {
   const { roomState, stateReceivedAt, userRole, playVideo, pauseVideo, seekVideo, playNext } = useSocket();
   const playerRef = useRef<any>(null);
-  const isRemoteAction = useRef<boolean>(false);
+  const remoteActionUntil = useRef<number>(0);
   const lastLoadedVideoId = useRef<string>('');
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [playerError, setPlayerError] = useState<string | null>(null);
@@ -41,8 +44,18 @@ export const VideoPlayer: React.FC = () => {
     return () => clearInterval(interval);
   }, [roomState?.startedAt]);
 
-  // 1. Initialize YouTube IFrame API
+  // 1. Initialize YouTube IFrame API only when a video is selected
   useEffect(() => {
+    if (!roomState?.videoId) {
+      if (playerRef.current && typeof playerRef.current.destroy === 'function') {
+        playerRef.current.destroy();
+        playerRef.current = null;
+        setIsPlayerReady(false);
+        window.ytPlayer = null;
+      }
+      return;
+    }
+
     if (!window.YT) {
       const tag = document.createElement('script');
       tag.src = 'https://www.youtube.com/iframe_api';
@@ -57,13 +70,19 @@ export const VideoPlayer: React.FC = () => {
     }
 
     function initPlayer() {
-      if (playerRef.current) return;
+      if (playerRef.current) {
+        if (roomState?.videoId && roomState.videoId !== lastLoadedVideoId.current) {
+          syncPlayerToState(playerRef.current, roomState);
+        }
+        return;
+      }
 
-      const initialId = roomState?.videoId || 'L_LUpnjgPso';
+      const initialId = roomState?.videoId;
+      if (!initialId) return;
+
       lastLoadedVideoId.current = initialId;
 
       playerRef.current = new window.YT.Player('youtube-iframe-container', {
-
         height: '100%',
         width: '100%',
         videoId: initialId,
@@ -76,20 +95,23 @@ export const VideoPlayer: React.FC = () => {
         },
         events: {
           onReady: (event: any) => {
-            
             setIsPlayerReady(true);
+            window.ytPlayer = event.target;
             if (roomState) {
               syncPlayerToState(event.target, roomState);
             }
           },
-          
           onStateChange: handlePlayerStateChange,
           onError: handlePlayerError,
         },
       });
     }
-    
+  }, [roomState?.videoId]);
+
+  // Clean up player on component unmount
+  useEffect(() => {
     return () => {
+      window.ytPlayer = null;
       if (playerRef.current && typeof playerRef.current.destroy === 'function') {
         playerRef.current.destroy();
         playerRef.current = null;
@@ -119,44 +141,81 @@ export const VideoPlayer: React.FC = () => {
     }
   };
 
-  // 6. Native Boundary Enforcement & Host Sync Loop
+  // 6. Native Boundary Enforcement & Continuous Host/Viewer Play-State Sync Loop
   useEffect(() => {
     if (!isPlayerReady || !playerRef.current || !roomState) return;
 
     const interval = setInterval(() => {
       const player = playerRef.current;
-      if (typeof player.getCurrentTime !== 'function') return;
+      if (typeof player.getCurrentTime !== 'function' || typeof player.getPlayerState !== 'function') return;
 
       const localTime = player.getCurrentTime();
+      const currentState = player.getPlayerState();
       
       const serverTime = roomState.playState === 'playing'
-        ? (roomState.currentTime || 0) + (Date.now() - (stateReceivedAt || Date.now())) / 1000
+        ? (roomState.currentTime || 0) + Math.max(0, (Date.now() - (stateReceivedAt || Date.now())) / 1000)
         : (roomState.currentTime || 0);
 
       if (userRole === 'host') {
-        // HOST: Update server if drifted
-        if (Math.abs(localTime - serverTime) > 2.0) {
-           seekVideo(localTime);
-        }
+        // HOST: Do not seek or call seekVideo in a continuous interval loop.
+        // The host's player is the master reference.
         return;
       }
 
-      // VIEWER & MODERATOR: Boundary Enforcement
-      if (localTime > serverTime + 1.0) {
-        if (typeof player.seekTo === 'function') {
-          player.seekTo(serverTime, true);
-          // @ts-ignore
-          window.isDvrMode = false; 
+      // NON-HOST (Viewer & Moderator):
+      // A. Boundary check: CANNOT play or seek past host's live edge!
+      if (localTime > serverTime + 2.0) {
+        remoteActionUntil.current = Date.now() + 1200;
+        player.seekTo(serverTime, true);
+        if (roomState.playState === 'paused') {
+          player.pauseVideo();
         }
-      } else if (localTime < serverTime - 2.0) {
-        // Viewer scrubbed backward natively
-        // @ts-ignore
-        window.isDvrMode = true;
+        window.isDvrMode = false;
+        setIsDvrMode(false);
+        return;
+      }
+
+      // B. If viewer is in DVR mode (rewound to seen live video):
+      if (window.isDvrMode) {
+        // If viewer reached within 1.0s of live edge, smoothly transition back to live mode
+        if (localTime >= serverTime - 1.0) {
+          window.isDvrMode = false;
+          setIsDvrMode(false);
+          if (roomState.playState === 'paused' && currentState !== 2) {
+            remoteActionUntil.current = Date.now() + 1200;
+            player.pauseVideo();
+          }
+        }
+        // In DVR mode, do NOT override viewer's local play/pause/seek controls
+        return;
+      }
+
+      // C. If viewer is at LIVE edge (not in DVR mode):
+      if (roomState.playState === 'paused') {
+        // Host paused live stream: viewer at live edge stops
+        if (currentState !== 2 && currentState !== -1) {
+          remoteActionUntil.current = Date.now() + 1200;
+          player.pauseVideo();
+        }
+        if (Math.abs(localTime - serverTime) > 2.0) {
+          remoteActionUntil.current = Date.now() + 1200;
+          player.seekTo(serverTime, true);
+        }
+      } else {
+        // Host is playing live stream: viewer at live edge plays
+        if (currentState !== 1 && currentState !== 3) {
+          remoteActionUntil.current = Date.now() + 1200;
+          player.playVideo();
+        }
+        if (Math.abs(localTime - serverTime) > 3.0) {
+          remoteActionUntil.current = Date.now() + 1200;
+          player.seekTo(serverTime, true);
+        }
       }
     }, 500);
 
     return () => clearInterval(interval);
-  }, [isPlayerReady, canControl, roomState, stateReceivedAt]);
+  }, [isPlayerReady, canControl, userRole, roomState, stateReceivedAt]);
 
   // 2. Handle Player Error Events
   const handlePlayerError = (event: any) => {
@@ -172,28 +231,45 @@ export const VideoPlayer: React.FC = () => {
   };
 
   // 3. Handle YouTube Player State Change Events (Local User Actions)
-  const stateRef = useRef({ canControl, userRole, playVideo, pauseVideo, playNext });
+  const stateRef = useRef({ canControl, userRole, playVideo, pauseVideo, playNext, roomState });
   useEffect(() => {
-    stateRef.current = { canControl, userRole, playVideo, pauseVideo, playNext };
-  }, [canControl, userRole, playVideo, pauseVideo, playNext]);
+    stateRef.current = { canControl, userRole, playVideo, pauseVideo, playNext, roomState };
+  }, [canControl, userRole, playVideo, pauseVideo, playNext, roomState]);
 
   const handlePlayerStateChange = (event: any) => {
-    if (isRemoteAction.current) {
-      isRemoteAction.current = false;
+    if (Date.now() < remoteActionUntil.current) {
       return;
     }
 
-    const { canControl, userRole, playVideo, pauseVideo, playNext } = stateRef.current;
-
-    if (!canControl) return; // Ignore user events if restricted
-
+    const { canControl, userRole, playVideo, pauseVideo, playNext, roomState } = stateRef.current;
     const playerState = event.data;
+
+    if (!canControl) {
+      // If viewer was at live edge and host is paused, don't let them auto-play past the live edge
+      if (!window.isDvrMode && roomState?.playState === 'paused') {
+        if (playerState === 1 || playerState === 3) {
+          remoteActionUntil.current = Date.now() + 1200;
+          playerRef.current?.pauseVideo();
+          if (roomState.currentTime !== undefined) {
+            playerRef.current?.seekTo(roomState.currentTime, true);
+          }
+        }
+      }
+      return; // Viewer local playback does not affect room broadcast
+    }
+
+    // Host / Moderator:
+    const localTime = typeof playerRef.current?.getCurrentTime === 'function' ? playerRef.current.getCurrentTime() : undefined;
 
     // YT.PlayerState: PLAYING=1, PAUSED=2, BUFFERING=3, ENDED=0
     if (playerState === 1) {
-      playVideo();
+      if (roomState?.playState !== 'playing') {
+        playVideo(localTime);
+      }
     } else if (playerState === 2) {
-      pauseVideo();
+      if (roomState?.playState !== 'paused') {
+        pauseVideo(localTime);
+      }
     } else if (playerState === 0 && userRole === 'host') {
       playNext();
     }
@@ -204,7 +280,7 @@ export const VideoPlayer: React.FC = () => {
     if (!player || typeof player.getPlayerState !== 'function') return;
 
     setPlayerError(null);
-    isRemoteAction.current = true;
+    remoteActionUntil.current = Date.now() + 1200;
 
     // A. Video ID Sync
     if (state.videoId && state.videoId !== lastLoadedVideoId.current) {
@@ -216,35 +292,55 @@ export const VideoPlayer: React.FC = () => {
         });
       }
       if (state.playState === 'playing' && typeof player.playVideo === 'function') {
-        setTimeout(() => player.playVideo(), 300);
+        setTimeout(() => {
+          remoteActionUntil.current = Date.now() + 1200;
+          player.playVideo();
+        }, 300);
+      } else if (state.playState === 'paused' && typeof player.pauseVideo === 'function') {
+        setTimeout(() => {
+          remoteActionUntil.current = Date.now() + 1200;
+          player.pauseVideo();
+        }, 300);
       }
       return;
     }
 
-    // B. Seek position sync (if drift > 2.0 seconds)
+    // HOST: Host is the source of truth for playback.
+    // Never overwrite the host's seek position with roomState updates.
+    if (userRole === 'host') {
+      return;
+    }
+
+    // B. Seek position sync for Viewers/Moderators
     const localTime = (typeof player.getCurrentTime === 'function' && player.getCurrentTime()) || 0;
-    const targetTime = state.currentTime || 0;
+    const elapsedSinceState = state.playState === 'playing'
+      ? Math.max(0, (Date.now() - (stateReceivedAt || Date.now())) / 1000)
+      : 0;
+    const targetTime = (state.currentTime || 0) + elapsedSinceState;
     
-    // @ts-ignore
     if (window.isDvrMode) {
       // Push back if they scrubbed PAST the live edge
       if (localTime > targetTime + 2.0 && typeof player.seekTo === 'function') {
         player.seekTo(targetTime, true);
-        // @ts-ignore
         window.isDvrMode = false;
+        setIsDvrMode(false);
       }
     } else {
-      if (Math.abs(localTime - targetTime) > 2.0 && typeof player.seekTo === 'function') {
+      if (Math.abs(localTime - targetTime) > 3.0 && typeof player.seekTo === 'function') {
         player.seekTo(targetTime, true);
       }
     }
 
-    // C. Play / Pause state sync
+    // C. Strict Play / Pause state sync
     const currentState = typeof player.getPlayerState === 'function' ? player.getPlayerState() : -1;
-    if (state.playState === 'playing' && currentState !== 1 && typeof player.playVideo === 'function') {
-      player.playVideo();
-    } else if (state.playState === 'paused' && currentState !== 2 && typeof player.pauseVideo === 'function') {
-      player.pauseVideo();
+    if (state.playState === 'playing') {
+      if (currentState !== 1 && typeof player.playVideo === 'function') {
+        player.playVideo();
+      }
+    } else if (state.playState === 'paused') {
+      if (currentState !== 2 && typeof player.pauseVideo === 'function') {
+        player.pauseVideo();
+      }
     }
   };
 
@@ -253,11 +349,37 @@ export const VideoPlayer: React.FC = () => {
     if (isPlayerReady && playerRef.current && roomState) {
       syncPlayerToState(playerRef.current, roomState);
     }
-  }, [roomState?.videoId, roomState?.playState, roomState?.currentTime, isPlayerReady]);
+  }, [roomState?.videoId, roomState?.playState, roomState?.currentTime, isPlayerReady, stateReceivedAt]);
+
+  if (!roomState?.videoId) {
+    return (
+      <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 shadow-2xl flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="w-16 h-16 rounded-2xl bg-rose-600/10 border border-rose-500/20 flex items-center justify-center text-rose-500 mb-4 shadow-xl">
+          <PlaySquare className="w-8 h-8" />
+        </div>
+        <h3 className="text-base sm:text-lg font-bold text-white mb-1.5">
+          {canControl ? 'No Video Selected' : 'Waiting for Host'}
+        </h3>
+        <p className="text-xs sm:text-sm text-slate-400 max-w-sm">
+          {canControl
+            ? 'Paste a YouTube video link below to start your Live Watch Party.'
+            : 'The host has not started a video yet. Playback will begin as soon as a video link is added.'}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-slate-900 border border-slate-800 shadow-2xl">
       <div id="youtube-iframe-container" className="w-full h-full" />
+
+      {/* Host Paused Badge for Viewers when at Live Edge */}
+      {!canControl && !isDvrMode && roomState?.playState === 'paused' && (
+        <div className="absolute top-4 right-4 z-20 bg-slate-900/90 border border-amber-500/40 text-amber-400 px-3 py-1.5 rounded-xl flex items-center gap-2 shadow-xl backdrop-blur-sm animate-in fade-in duration-200">
+          <Pause className="w-3.5 h-3.5 fill-current" />
+          <span className="text-[11px] font-bold uppercase tracking-wider">Host Paused Live</span>
+        </div>
+      )}
 
       {/* Video Player Error Alert */}
       {playerError && (

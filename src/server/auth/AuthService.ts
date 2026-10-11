@@ -39,9 +39,4 @@ export class AuthService {
     const stored = await UserModel.findOne({ email: email.toLowerCase() });
     return stored ? stored.toJSON() as unknown as User : null;
   }
-
-  public async emailExists(email: string): Promise<boolean> {
-    const count = await UserModel.countDocuments({ email: email.toLowerCase() });
-    return count > 0;
-  }
 }

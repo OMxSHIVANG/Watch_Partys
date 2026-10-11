@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { RoomState, UserRole, RequestType, ReactionPayload, ChatMessage, ChangeRequestData, ParticipantData } from '../../../shared/types';
+import { useAuth } from './AuthContext';
 
 interface SocketContextType {
   socket: Socket | null;
@@ -15,8 +16,9 @@ interface SocketContextType {
   setCustomErrorMessage: (msg: string) => void;
   joinRoom: (roomId: string, username: string, options?: any) => void;
   leaveRoom: () => void;
-  playVideo: () => void;
-  pauseVideo: () => void;
+  endRoom: () => void;
+  playVideo: (time?: number) => void;
+  pauseVideo: (time?: number) => void;
   seekVideo: (time: number) => void;
   changeVideo: (videoId: string, videoTitle?: string) => void;
   assignRole: (targetUserId: string, role: UserRole) => void;
@@ -35,8 +37,6 @@ interface SocketContextType {
 }
 
 const SocketContext = createContext<SocketContextType | undefined>(undefined);
-
-import { useAuth } from './AuthContext';
 
 export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, token } = useAuth();
@@ -70,14 +70,6 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
 
     newSocket.on('sync_state', (state: RoomState) => {
-      // If the room has ended (e.g., host left), force leave
-      if (state.status === 'ended') {
-         setRoomState(null);
-         setRoomId('');
-         setUserRole('viewer');
-         alert('The host has left and the Watch Party has ended.');
-         return;
-      }
       setRoomState(state);
       setStateReceivedAt(Date.now());
       setRoomId(state.id);
@@ -86,11 +78,54 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const me = state.participants.find((p: ParticipantData) => p.id === userId);
       if (me) {
         setUserRole(me.role);
+      } else if (state.status === 'ended') {
+        setUserRole('viewer');
       }
     });
 
     newSocket.on('user_info', ({ userId: myId, role }: { userId: string; role: UserRole }) => {
       setUserRole(role);
+    });
+
+    newSocket.on('play', ({ currentTime, socketId }: { currentTime: number; socketId?: string }) => {
+      if (socketId && socketId === newSocket.id) return;
+      setRoomState((prev: RoomState | null) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          playState: 'playing',
+          currentTime,
+          lastUpdated: Date.now()
+        };
+      });
+      setStateReceivedAt(Date.now());
+    });
+
+    newSocket.on('pause', ({ currentTime, socketId }: { currentTime: number; socketId?: string }) => {
+      if (socketId && socketId === newSocket.id) return;
+      setRoomState((prev: RoomState | null) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          playState: 'paused',
+          currentTime,
+          lastUpdated: Date.now()
+        };
+      });
+      setStateReceivedAt(Date.now());
+    });
+
+    newSocket.on('seek', ({ currentTime, socketId }: { currentTime: number; socketId?: string }) => {
+      if (socketId && socketId === newSocket.id) return;
+      setRoomState((prev: RoomState | null) => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          currentTime,
+          lastUpdated: Date.now()
+        };
+      });
+      setStateReceivedAt(Date.now());
     });
 
     newSocket.on('chat_message', (msg: ChatMessage) => {
@@ -124,6 +159,12 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setErrorMessage(message);
       setRoomState(null);
       setRoomId('');
+    });
+
+    newSocket.on('room_ended', ({ message }: { message?: string }) => {
+      setErrorMessage(message || 'The live stream has ended. The recorded replay is now available.');
+      setRoomState(prev => prev ? { ...prev, status: 'ended', playState: 'paused' } : null);
+      setUserRole('viewer');
     });
 
     newSocket.on('error_message', ({ message }: { message: string }) => {
@@ -164,18 +205,45 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setRoomId('');
   };
 
-  const playVideo = () => {
+  const endRoom = () => {
     if (!socket || !roomId) return;
-    socket.emit('play', { roomId });
+    socket.emit('end_room', { roomId });
+    setRoomState(null);
+    setRoomId('');
   };
 
-  const pauseVideo = () => {
+  const playVideo = (time?: number) => {
     if (!socket || !roomId) return;
-    socket.emit('pause', { roomId });
+    setRoomState(prev => prev ? {
+      ...prev,
+      playState: 'playing',
+      currentTime: time !== undefined ? time : prev.currentTime,
+      lastUpdated: Date.now()
+    } : null);
+    setStateReceivedAt(Date.now());
+    socket.emit('play', { roomId, time });
+  };
+
+  const pauseVideo = (time?: number) => {
+    if (!socket || !roomId) return;
+    setRoomState(prev => prev ? {
+      ...prev,
+      playState: 'paused',
+      currentTime: time !== undefined ? time : prev.currentTime,
+      lastUpdated: Date.now()
+    } : null);
+    setStateReceivedAt(Date.now());
+    socket.emit('pause', { roomId, time });
   };
 
   const seekVideo = (time: number) => {
     if (!socket || !roomId) return;
+    setRoomState(prev => prev ? {
+      ...prev,
+      currentTime: time,
+      lastUpdated: Date.now()
+    } : null);
+    setStateReceivedAt(Date.now());
     socket.emit('seek', { roomId, time });
   };
 
@@ -270,6 +338,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setCustomErrorMessage,
         joinRoom,
         leaveRoom,
+        endRoom,
         playVideo,
         pauseVideo,
         seekVideo,

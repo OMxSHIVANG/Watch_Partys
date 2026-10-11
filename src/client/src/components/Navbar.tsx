@@ -3,13 +3,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useSocket } from '../context/SocketContext';
 import { useAuth } from '../context/AuthContext';
 import { RoleBadge } from './RoleBadge';
-import { Tv, Users, LogOut, Share2, Check, Info, Search, Radio, History } from 'lucide-react';
+import { Tv, Users, LogOut, Share2, Check, Info, Search, Radio, History, Square } from 'lucide-react';
 import { RoomInfoModal } from './RoomInfoModal';
 
 import { ParticipantData } from '../../../shared/types';
 
 export const Navbar: React.FC = () => {
-  const { roomState, roomId, userRole, leaveRoom, username } = useSocket();
+  const { roomState, roomId, userRole, leaveRoom, endRoom, username } = useSocket();
   const { user, logout } = useAuth();
   const [copied, setCopied] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
@@ -116,14 +116,30 @@ export const Navbar: React.FC = () => {
               <Info className="w-4 h-4" />
             </button>
             
-            {/* Leave Room Button */}
-            <button
-              onClick={leaveRoom}
-              className="flex items-center gap-1.5 bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Leave</span>
-            </button>
+            {/* End Stream (Host) or Leave Room (Participants) */}
+            {userRole === 'host' ? (
+              <button
+                onClick={() => {
+                  if (window.confirm('Are you sure you want to end this live Watch Party for all viewers? It will be saved for replay.')) {
+                    endRoom();
+                  }
+                }}
+                className="flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white border border-rose-500/50 px-3 py-1.5 rounded-lg text-xs font-bold transition-all shadow-md shadow-rose-950/40"
+                title="End Watch Party"
+              >
+                <Square className="w-3 h-3 fill-current" />
+                <span>End Stream</span>
+              </button>
+            ) : (
+              <button
+                onClick={leaveRoom}
+                className="flex items-center gap-1.5 bg-rose-600/10 hover:bg-rose-600/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                title="Leave Watch Party"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Leave</span>
+              </button>
+            )}
           </div>
         ) : (
           <div className="text-xs text-slate-400">Real-time YouTube Synchronization</div>

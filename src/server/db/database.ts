@@ -1,5 +1,5 @@
 import { RoomModel } from './models/Room';
-import { PlayState, ParticipantData, ChangeRequestData, ChatMessage, RoomState } from '../../shared/types';
+import { ChatMessage, RoomState } from '../../shared/types';
 export type StoredRoom = RoomState & { passwordHash?: string };
 
 export class DatabaseService {
@@ -10,20 +10,11 @@ export class DatabaseService {
   public async saveRoom(roomState: StoredRoom): Promise<void> {
     try {
       const { id, ...rest } = roomState;
-      
-      if (rest.status === 'live') {
-        await RoomModel.findOneAndUpdate(
-          { roomId: id, isDeleted: { $ne: true } },
-          { roomId: id, ...rest },
-          { upsert: true, new: true }
-        );
-      } else {
-        await RoomModel.findOneAndUpdate(
-          { roomId: id, isDeleted: { $ne: true } },
-          { roomId: id, ...rest },
-          { new: true }
-        );
-      }
+      await RoomModel.findOneAndUpdate(
+        { roomId: id, isDeleted: { $ne: true } },
+        { roomId: id, ...rest },
+        { upsert: true, returnDocument: 'after' }
+      );
     } catch (err) {
       console.error('[DatabaseService] Error saving room:', err);
     }
@@ -69,7 +60,7 @@ export class DatabaseService {
 
   public async loadAllRooms(): Promise<any[]> {
     try {
-      const rooms = await RoomModel.find({ status: 'live', isDeleted: { $ne: true } }).lean();
+      const rooms = await RoomModel.find({ isDeleted: { $ne: true } }).lean();
       return rooms.map((r: any) => {
         const { roomId, ...rest } = r;
         return {

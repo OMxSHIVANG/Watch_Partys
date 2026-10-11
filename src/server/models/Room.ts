@@ -28,22 +28,22 @@ export class Room {
   public recentVideos: PlaylistItem[];
   public passwordHash?: string;
   public purpose?: string;
-  public segments: Array<{start: number, end: number}>;
+  public segments: Array<{start: number, end: number, videoId: string, videoTitle?: string}>;
   public currentSegmentStart?: number;
   public initialVideoPosition?: number;
   public finalVideoPosition?: number;
   public durationWatched?: number;
   public thumbnail?: string;
 
-  constructor(id: string, hostId: string, initialVideoId: string = 'L_LUpnjgPso', passwordHash?: string) {
+  constructor(id: string, hostId: string, initialVideoId: string = '', passwordHash?: string) {
     this.id = id;
     this.name = `Room ${id}`;
     this.description = '';
     this.isPublic = true;
     this.participantLimit = 50;
     this.hostId = hostId;
-    this.videoId = initialVideoId;
-    this.videoTitle = 'Lofi Hip Hop Radio - Beats to Relax/Study to';
+    this.videoId = initialVideoId || '';
+    this.videoTitle = initialVideoId ? 'YouTube Video' : '';
     this.playState = 'paused';
     this.currentTime = 0;
     this.lastUpdated = Date.now();
@@ -59,10 +59,30 @@ export class Room {
   }
 
   public finalizeSegments(): void {
-    if (this.currentSegmentStart !== undefined) {
-       const elapsed = (Date.now() - this.lastUpdated) / 1000;
-       this.segments.push({ start: this.currentSegmentStart, end: this.currentTime + elapsed });
+    if (this.currentSegmentStart !== undefined && this.videoId) {
+       const elapsed = this.playState === 'playing' ? Math.max(0, (Date.now() - this.lastUpdated) / 1000) : 0;
+       const end = Math.max(this.currentSegmentStart, this.currentTime + elapsed);
+       if (end - this.currentSegmentStart >= 0.2) {
+         this.segments.push({ 
+           start: Number(this.currentSegmentStart.toFixed(2)), 
+           end: Number(end.toFixed(2)),
+           videoId: this.videoId,
+           videoTitle: this.videoTitle
+         });
+       }
        this.currentSegmentStart = undefined;
+
+       // Merge adjacent continuous segments for the same video
+       if (this.segments.length > 1) {
+         const last = this.segments[this.segments.length - 1];
+         const prev = this.segments[this.segments.length - 2];
+         if (last.videoId === prev.videoId && Math.abs(last.start - prev.end) <= 2.5) {
+           prev.end = Math.max(prev.end, last.end);
+           this.segments.pop();
+         }
+       }
+
+       this.durationWatched = this.segments.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);
     }
   }
 
@@ -172,29 +192,49 @@ export class Room {
 
     const now = Date.now();
 
-    if (update.currentTime !== undefined) {
-      this.currentTime = update.currentTime;
-      this.lastUpdated = now;
-    } else if (update.playState !== undefined) {
-      this.currentTime = this.getCalculatedCurrentTime();
-      this.lastUpdated = now;
-    }
-
-    if (update.playState) {
-      this.playState = update.playState;
-    }
-
+    // Changing video: append segment, keep previous history, start fresh timeline for new video
     if (update.videoId && update.videoId !== this.videoId) {
+      this.finalizeSegments();
+      
       this.videoId = update.videoId;
       this.videoTitle = update.videoTitle || 'YouTube Video';
       this.currentTime = 0;
       this.playState = 'playing';
       this.lastUpdated = now;
+      this.currentSegmentStart = 0;
+      
       this.addChatMessage(
         'system',
         `${requester.username} changed video to: ${this.videoTitle}`,
         'system'
       );
+      return { success: true };
+    }
+
+    const newPlayState = update.playState || this.playState;
+    // Changing time (seeking) or pausing -> finalize current segment
+    if (update.currentTime !== undefined) {
+      this.finalizeSegments();
+      this.currentTime = Math.max(0, update.currentTime);
+      this.lastUpdated = now;
+      if (newPlayState === 'playing') {
+        this.currentSegmentStart = this.currentTime;
+      }
+    } else if (update.playState !== undefined) {
+      this.currentTime = this.getCalculatedCurrentTime();
+      this.lastUpdated = now;
+      
+      if (update.playState === 'playing' && this.playState !== 'playing') {
+        // Resume playing -> start new segment
+        this.currentSegmentStart = this.currentTime;
+      } else if (update.playState !== 'playing' && this.playState === 'playing') {
+        // Pause/buffer -> finalize segment
+        this.finalizeSegments();
+      }
+    }
+
+    if (update.playState) {
+      this.playState = update.playState;
     }
 
     return { success: true };
@@ -297,6 +337,7 @@ export class Room {
   }
 
   public toState(): RoomState {
+    const calcTime = this.getCalculatedCurrentTime();
     return {
       id: this.id,
       status: this.status,
@@ -319,8 +360,8 @@ export class Room {
       videoId: this.videoId,
       videoTitle: this.videoTitle,
       playState: this.playState,
-      currentTime: this.getCalculatedCurrentTime(),
-      lastUpdated: this.lastUpdated,
+      currentTime: calcTime,
+      lastUpdated: this.playState === 'playing' ? Date.now() : this.lastUpdated,
       participants: Array.from(this.participants.values()).map((p) => p.toJSON()),
       requests: Array.from(this.requests.values())
         .filter((r) => r.status === 'pending')

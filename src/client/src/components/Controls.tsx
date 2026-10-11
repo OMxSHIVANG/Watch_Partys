@@ -1,21 +1,32 @@
 import React, { useState } from 'react';
 import { useSocket } from '../context/SocketContext';
-import { extractYouTubeId, DEFAULT_VIDEOS } from '../../../shared/youtube';
-import { Play, Pause, RotateCcw, Link as LinkIcon, Send, Sparkles, Lock } from 'lucide-react';
+import { extractYouTubeId } from '../../../shared/youtube';
+import { Play, Pause, RotateCcw, RotateCw, Link as LinkIcon, Send, Lock } from 'lucide-react';
 
 export const Controls: React.FC = () => {
-  const { roomState, stateReceivedAt, userRole, playVideo, pauseVideo, seekVideo, changeVideo, requestChange, setCustomErrorMessage } = useSocket();
+  const { roomState, stateReceivedAt, userRole, userId, playVideo, pauseVideo, seekVideo, changeVideo, requestChange, setCustomErrorMessage } = useSocket();
 
   const [inputUrl, setInputUrl] = useState('');
   const [showRequestModal, setShowRequestModal] = useState(false);
   const [requestUrl, setRequestUrl] = useState('');
 
-  const canControl = userRole === 'host' || userRole === 'moderator';
+  const isHost = userRole === 'host' || (roomState?.hostId ? roomState.hostId === userId : false);
+  const canControl = isHost || userRole === 'moderator';
   const isPlaying = roomState?.playState === 'playing';
   const [liveEdgeTime, setLiveEdgeTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(7200);
   const [localDisplayTime, setLocalDisplayTime] = useState(0);
   const [isDvrMode, setIsDvrMode] = useState(false);
+  const [localPlayerState, setLocalPlayerState] = useState<number>(1);
+
+  const isStreamEnded = roomState?.status === 'ended' || Boolean(roomState?.endedAt);
+  const maxRecordedDuration = Math.max(
+    (roomState?.segments && roomState.segments.length > 0
+      ? roomState.segments[roomState.segments.length - 1].end
+      : 0),
+    roomState?.durationWatched || 0,
+    videoDuration || 0
+  );
 
   React.useEffect(() => {
     const interval = setInterval(() => {
@@ -26,40 +37,93 @@ export const Controls: React.FC = () => {
         setLiveEdgeTime(Math.floor(edge));
       }
 
-      // @ts-ignore
       if (window.ytPlayer && typeof window.ytPlayer.getDuration === 'function') {
-        // @ts-ignore
         const dur = window.ytPlayer.getDuration();
         if (dur > 0) setVideoDuration(dur);
 
-        // @ts-ignore
+        const state = window.ytPlayer.getPlayerState();
+        if (typeof state === 'number') {
+          setLocalPlayerState(state);
+        }
+
         const dvr = !!window.isDvrMode;
         setIsDvrMode(dvr);
 
-        if (dvr) {
-          // @ts-ignore
+        if (dvr || isStreamEnded) {
           setLocalDisplayTime(Math.floor(window.ytPlayer.getCurrentTime() || 0));
         }
       }
     }, 500);
     return () => clearInterval(interval);
-  }, [roomState, stateReceivedAt]);
+  }, [roomState, stateReceivedAt, isStreamEnded]);
 
-  const sliderValue = isDvrMode && !canControl ? localDisplayTime : liveEdgeTime;
+  const sliderValue = isStreamEnded 
+    ? localDisplayTime 
+    : isDvrMode && !canControl 
+    ? localDisplayTime 
+    : liveEdgeTime;
+  const isViewerPlaying = canControl && !isStreamEnded ? isPlaying : (localPlayerState === 1 || localPlayerState === 3);
 
   const jumpToLive = () => {
-    // @ts-ignore
+    if (isStreamEnded) return;
     window.isDvrMode = false;
     setIsDvrMode(false);
-    // @ts-ignore
     if (window.ytPlayer && typeof window.ytPlayer.seekTo === 'function') {
-      // @ts-ignore
       window.ytPlayer.seekTo(liveEdgeTime, true);
-      // Force play if the host is currently playing
-      // @ts-ignore
       if (isPlaying && typeof window.ytPlayer.playVideo === 'function') {
-        // @ts-ignore
         window.ytPlayer.playVideo();
+      }
+    }
+  };
+
+  const handleTogglePlayPause = () => {
+    if (canControl && !isStreamEnded) {
+      const curTime = typeof window.ytPlayer?.getCurrentTime === 'function' ? window.ytPlayer.getCurrentTime() : liveEdgeTime;
+      if (isPlaying) {
+        pauseVideo(curTime);
+      } else {
+        playVideo(curTime);
+      }
+      return;
+    }
+
+    // Viewer / Participant local control (and Host when watching recorded replay)
+    if (window.ytPlayer) {
+      const state = typeof window.ytPlayer.getPlayerState === 'function' ? window.ytPlayer.getPlayerState() : -1;
+      if (state === 1 || state === 3) {
+        window.ytPlayer.pauseVideo?.();
+        if (!isStreamEnded) {
+          window.isDvrMode = true;
+          setIsDvrMode(true);
+        }
+      } else {
+        window.ytPlayer.playVideo?.();
+      }
+    }
+  };
+
+  const handleSkip = (seconds: number) => {
+    if (canControl && !isStreamEnded) {
+      const newTime = Math.max(0, sliderValue + seconds);
+      seekVideo(newTime);
+      return;
+    }
+
+    // Viewer / Participant skip forward or backward (in DVR mode or recorded replay)
+    if (window.ytPlayer) {
+      const cur = typeof window.ytPlayer.getCurrentTime === 'function' ? window.ytPlayer.getCurrentTime() : localDisplayTime;
+      const boundary = isStreamEnded ? (maxRecordedDuration || videoDuration) : liveEdgeTime;
+      const targetTime = Math.max(0, Math.min(boundary, cur + seconds));
+      window.ytPlayer.seekTo?.(targetTime, true);
+      setLocalDisplayTime(targetTime);
+      if (!isStreamEnded) {
+        if (targetTime < liveEdgeTime - 1.5) {
+          window.isDvrMode = true;
+          setIsDvrMode(true);
+        } else {
+          window.isDvrMode = false;
+          setIsDvrMode(false);
+        }
       }
     }
   };
@@ -73,21 +137,25 @@ export const Controls: React.FC = () => {
 
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const targetTime = parseFloat(e.target.value);
-    if (canControl) {
+    if (canControl && !isStreamEnded) {
       seekVideo(targetTime);
-      // @ts-ignore
       window.isDvrMode = false;
     } else {
-      // Viewer DVR scrubbing
-      const clampedTime = Math.min(targetTime, liveEdgeTime);
-      // @ts-ignore
+      // Viewer DVR scrubbing or Recorded Replay scrubbing
+      const boundary = isStreamEnded ? (maxRecordedDuration || videoDuration) : liveEdgeTime;
+      const clampedTime = Math.min(targetTime, boundary);
       if (window.ytPlayer && typeof window.ytPlayer.seekTo === 'function') {
-        // @ts-ignore
-        window.isDvrMode = true;
-        // @ts-ignore
         window.ytPlayer.seekTo(clampedTime, true);
         setLocalDisplayTime(clampedTime);
-        setIsDvrMode(true);
+        if (!isStreamEnded) {
+          if (clampedTime < liveEdgeTime - 1.5) {
+            window.isDvrMode = true;
+            setIsDvrMode(true);
+          } else {
+            window.isDvrMode = false;
+            setIsDvrMode(false);
+          }
+        }
       }
     }
   };
@@ -112,62 +180,72 @@ export const Controls: React.FC = () => {
     }
   };
 
-  const handleSelectDefaultVideo = (videoId: string, title: string) => {
-    if (canControl) {
-      changeVideo(videoId, title);
-    } else {
-      requestChange('change_video', { videoId, videoTitle: title });
-    }
-  };
-
   return (
     <div className="bg-slate-900 rounded-2xl p-4 border border-slate-800 space-y-4">
-      {/* 1. Playback Status & Direct / Request Action Bar */}
+      {/* 1. Playback Controls & Direct / Request Action Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        {/* Play/Pause Button */}
-        <div className="flex items-center gap-3">
-          {canControl ? (
-            <button
-              onClick={isPlaying ? pauseVideo : playVideo}
-              className="w-12 h-12 rounded-xl bg-gradient-to-tr from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all transform active:scale-95"
-            >
-              {isPlaying ? <Pause className="w-6 h-6 fill-current" /> : <Play className="w-6 h-6 fill-current ml-0.5" />}
-            </button>
-          ) : (
-            <div
-              className="flex items-center gap-2 bg-slate-800/50 text-slate-400 border border-slate-700/50 px-3 py-2 rounded-xl text-xs font-semibold cursor-not-allowed"
-              title="Watch only. Host or Moderator controls playback."
-            >
-              <Lock className="w-4 h-4" />
-              <span>{isPlaying ? 'Playing' : 'Paused'} (Watch Only)</span>
-            </div>
-          )}
+        {/* Playback Button Group: -10s, Play/Pause, +10s */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Skip Back 10s */}
+          <button
+            onClick={() => handleSkip(-10)}
+            title="Rewind 10 seconds"
+            className="w-10 h-10 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white flex items-center justify-center border border-slate-700/60 shadow-md transition-all active:scale-95 text-xs font-bold gap-0.5"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
 
-          <div>
-            <div className="text-xs text-slate-400 font-medium">Status</div>
+          {/* Play/Pause Button */}
+          <button
+            onClick={handleTogglePlayPause}
+            title={isViewerPlaying ? "Pause" : "Play"}
+            className="w-12 h-12 rounded-xl bg-gradient-to-tr from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white flex items-center justify-center shadow-lg shadow-rose-500/30 transition-all transform active:scale-95"
+          >
+            {isViewerPlaying ? (
+              <Pause className="w-6 h-6 fill-current" />
+            ) : (
+              <Play className="w-6 h-6 fill-current ml-0.5" />
+            )}
+          </button>
+
+          {/* Skip Forward 10s */}
+          <button
+            onClick={() => handleSkip(10)}
+            title="Skip forward 10 seconds"
+            className="w-10 h-10 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white flex items-center justify-center border border-slate-700/60 shadow-md transition-all active:scale-95 text-xs font-bold gap-0.5"
+          >
+            <RotateCw className="w-4 h-4" />
+          </button>
+
+          {/* Status & Live Pill */}
+          <div className="ml-1 sm:ml-2">
+            <div className="text-[11px] text-slate-400 font-medium">
+              {isStreamEnded ? 'Recorded Replay' : canControl ? 'Broadcast' : isDvrMode ? 'Rewound Live' : 'Live Sync'}
+            </div>
             <div className="flex items-center gap-2">
-              <div className="text-sm font-semibold capitalize text-slate-200 flex items-center gap-1.5">
+              <div className="text-xs sm:text-sm font-semibold capitalize text-slate-200 flex items-center gap-1.5">
                 <span
                   className={`w-2 h-2 rounded-full ${
-                    isPlaying ? 'bg-emerald-500 animate-ping' : 'bg-amber-500'
+                    isViewerPlaying ? 'bg-emerald-500 animate-ping' : 'bg-amber-500'
                   }`}
                 />
-                {isPlaying ? 'Playing' : 'Paused'}
+                {isViewerPlaying ? 'Playing' : 'Paused'}
               </div>
               
-              {!canControl && (
-                <button 
-                  onClick={isDvrMode ? jumpToLive : undefined} 
-                  className={`ml-2 text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm flex items-center gap-1.5 transition-colors border ${
-                    isDvrMode 
-                      ? "bg-slate-800 hover:bg-slate-700 text-slate-400 border-slate-700 cursor-pointer" 
-                      : "bg-rose-500/20 text-rose-500 border-rose-500/30 cursor-default"
-                  }`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full ${isDvrMode ? "bg-slate-500" : "bg-rose-500 animate-pulse"}`} />
-                  LIVE
-                </button>
-              )}
+              <button 
+                onClick={!isStreamEnded && isDvrMode ? jumpToLive : undefined} 
+                title={isStreamEnded ? "Recorded Replay" : isDvrMode ? "Jump to Live Edge" : "Watching Live"}
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm flex items-center gap-1.5 transition-colors border ${
+                  isStreamEnded
+                    ? "bg-blue-500/20 text-blue-400 border-blue-500/30 cursor-default"
+                    : isDvrMode 
+                    ? "bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-600 cursor-pointer animate-pulse" 
+                    : "bg-rose-500/20 text-rose-500 border-rose-500/30 cursor-default"
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${isStreamEnded ? "bg-blue-400" : isDvrMode ? "bg-slate-500" : "bg-rose-500 animate-pulse"}`} />
+                {isStreamEnded ? 'REPLAY' : isDvrMode ? 'GO LIVE' : 'LIVE'}
+              </button>
             </div>
           </div>
         </div>
@@ -177,7 +255,7 @@ export const Controls: React.FC = () => {
           <span className="text-xs font-mono text-slate-400 w-12 text-right">{formatTime(sliderValue)}</span>
           <div className="relative flex-1 flex items-center group">
             {/* The Live Edge Indicator Bar */}
-            {!canControl && (
+            {!canControl && !isStreamEnded && (
               <div 
                 className="absolute h-1.5 bg-rose-500/30 rounded-lg pointer-events-none" 
                 style={{ width: `${Math.min((liveEdgeTime / (videoDuration || 7200)) * 100, 100)}%`, zIndex: 0 }}
@@ -186,13 +264,13 @@ export const Controls: React.FC = () => {
             <input
               type="range"
               min={0}
-              max={videoDuration || 7200}
+              max={isStreamEnded ? (maxRecordedDuration || videoDuration || 7200) : canControl ? (videoDuration || 7200) : (liveEdgeTime || 1)}
               value={sliderValue}
               onChange={handleSeekChange}
               className={`relative z-10 flex-1 h-2 rounded-lg appearance-none outline-none bg-slate-800 cursor-pointer accent-rose-500 hover:accent-rose-400`}
             />
           </div>
-          <span className="text-xs font-mono text-slate-500 w-12">{formatTime(videoDuration)}</span>
+          <span className="text-xs font-mono text-slate-500 w-12">{formatTime(isStreamEnded ? maxRecordedDuration : canControl ? videoDuration : liveEdgeTime)}</span>
         </div>
       </div>
 
@@ -219,22 +297,6 @@ export const Controls: React.FC = () => {
               <span>Change Video</span>
             </button>
           </form>
-
-          {/* 3. Preset Quick Videos */}
-          <div className="flex items-center gap-2 overflow-x-auto pt-1 pb-1">
-            <span className="text-xs text-slate-500 font-medium whitespace-nowrap flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-amber-400" /> Presets:
-            </span>
-            {DEFAULT_VIDEOS.map((vid) => (
-              <button
-                key={vid.id}
-                onClick={() => handleSelectDefaultVideo(vid.id, vid.title)}
-                className="text-xs bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-slate-700 px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors"
-              >
-                {vid.title.split('-')[0]}
-              </button>
-            ))}
-          </div>
         </>
       )}
     </div>

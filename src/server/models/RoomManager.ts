@@ -99,11 +99,6 @@ export class RoomManager {
     }
 
     let room = this.rooms.get(formattedId);
-    if (room && room.status === 'ended') {
-       this.rooms.delete(formattedId);
-       room = undefined;
-    }
-    
     let isNew = false;
 
     const pwd = typeof options === 'string' ? options : (options?.password || undefined);
@@ -138,7 +133,7 @@ export class RoomManager {
       room.updateParticipantSocket(userId, socketId);
       participant.username = username;
     } else {
-      const defaultRole: UserRole = room.participants.size === 0 ? 'host' : 'participant';
+      const defaultRole: UserRole = room.status === 'ended' ? 'viewer' : (room.participants.size === 0 ? 'host' : 'participant');
       participant = new Participant(userId, socketId, username, defaultRole);
       room.addParticipant(participant);
       isNew = true;

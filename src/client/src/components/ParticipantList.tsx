@@ -2,7 +2,7 @@ import React from 'react';
 import { useSocket } from '../context/SocketContext';
 import { RoleBadge } from './RoleBadge';
 import { UserRole, ParticipantData } from '../../../shared/types';
-import { Users, UserX, Crown, ShieldCheck, UserCheck } from 'lucide-react';
+import { Users, UserX, Crown, ShieldCheck } from 'lucide-react';
 
 export const ParticipantList: React.FC = () => {
   const { roomState, userId, userRole, assignRole, removeParticipant, transferHost } = useSocket();

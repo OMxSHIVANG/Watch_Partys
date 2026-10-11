@@ -25,14 +25,14 @@ export function setupSocketHandlers(io: Server, roomManager: RoomManager): void 
 
     // 1. Join Room
     socket.on('join_room', (data: any) => {
-      const { roomId, username, password, name, description, thumbnail, isPublic, participantLimit } = data;
+      const { roomId, username, password, name, description, thumbnail, isPublic, participantLimit, videoId } = data;
       if (!roomId || !username) {
         socket.emit('error_message', { message: 'Room ID and Username are required' });
         return;
       }
 
       const effectiveUserId = socket.data.userId;
-      const options = { password, name, description, thumbnail, isPublic, participantLimit };
+      const options = { password, name, description, thumbnail, isPublic, participantLimit, videoId };
       const result = roomManager.joinRoom(roomId, effectiveUserId, socket.id, username, options);
       if (!result.success || !result.room || !result.participant) {
         socket.emit('error_message', { message: result.reason || 'Failed to join room' });
@@ -66,6 +66,24 @@ export function setupSocketHandlers(io: Server, roomManager: RoomManager): void 
 
       const participant = room.getParticipantBySocket(socket.id);
       if (participant) {
+        if (participant.role === 'host') {
+          // If the host leaves, the live stream ends and recording is available
+          room.status = 'ended';
+          room.finalizeSegments();
+          room.endedAt = Date.now();
+          room.playState = 'paused';
+          room.addChatMessage('system', 'Host left. Live stream has ended. Recording is available.', 'system');
+
+          roomManager.saveRoomState(room);
+          io.to(room.id).emit('room_ended', {
+            message: 'Host left. The live stream has ended. Recording is available.',
+            roomId: room.id,
+          });
+          io.to(room.id).emit('sync_state', room.toState());
+          socket.leave(room.id);
+          return;
+        }
+
         roomManager.removeParticipantFromRoom(room.id, participant.id);
         socket.leave(room.id);
 
@@ -79,42 +97,79 @@ export function setupSocketHandlers(io: Server, roomManager: RoomManager): void 
       }
     });
 
-    // 3. Playback Controls - Play
-    socket.on('play', ({ roomId }: { roomId: string }) => {
+    // 2.5 End Room (Explicit host action)
+    socket.on('end_room', ({ roomId }: { roomId: string }) => {
       const room = roomManager.getRoom(roomId);
       if (!room) return;
 
       const participant = room.getParticipantBySocket(socket.id);
-      if (!participant) return;
-
-      const result = room.updatePlaybackState({ playState: 'playing' }, participant.id);
-      if (!result.success) {
-        socket.emit('error_message', { message: result.reason || 'Permission denied' });
+      if (!participant || participant.role !== 'host') {
+        socket.emit('error_message', { message: 'Only the host can end the Watch Party' });
         return;
       }
 
+      room.status = 'ended';
+      room.finalizeSegments();
+      room.endedAt = Date.now();
+      room.playState = 'paused';
+      room.addChatMessage('system', 'Host ended the live stream. Recording is available.', 'system');
+
       roomManager.saveRoomState(room);
-      io.to(room.id).emit('play', { currentTime: room.currentTime, updatedBy: participant.username });
+      io.to(room.id).emit('room_ended', {
+        message: 'The host has ended this live stream. Recording is available.',
+        roomId: room.id,
+      });
       io.to(room.id).emit('sync_state', room.toState());
     });
 
-    // 4. Playback Controls - Pause
-    socket.on('pause', ({ roomId }: { roomId: string }) => {
+    // 3. Playback Controls - Play
+    socket.on('play', ({ roomId, time }: { roomId: string; time?: number }) => {
       const room = roomManager.getRoom(roomId);
       if (!room) return;
 
       const participant = room.getParticipantBySocket(socket.id);
       if (!participant) return;
 
-      const result = room.updatePlaybackState({ playState: 'paused' }, participant.id);
+      const updateData: any = { playState: 'playing' };
+      if (typeof time === 'number' && !isNaN(time) && time >= 0) {
+        updateData.currentTime = time;
+      }
+
+      const result = room.updatePlaybackState(updateData, participant.id);
       if (!result.success) {
         socket.emit('error_message', { message: result.reason || 'Permission denied' });
         return;
       }
 
       roomManager.saveRoomState(room);
-      io.to(room.id).emit('pause', { currentTime: room.currentTime, updatedBy: participant.username });
-      io.to(room.id).emit('sync_state', room.toState());
+      const state = room.toState();
+      socket.to(room.id).emit('play', { currentTime: state.currentTime, updatedBy: participant.username, socketId: socket.id });
+      io.to(room.id).emit('sync_state', state);
+    });
+
+    // 4. Playback Controls - Pause
+    socket.on('pause', ({ roomId, time }: { roomId: string; time?: number }) => {
+      const room = roomManager.getRoom(roomId);
+      if (!room) return;
+
+      const participant = room.getParticipantBySocket(socket.id);
+      if (!participant) return;
+
+      const updateData: any = { playState: 'paused' };
+      if (typeof time === 'number' && !isNaN(time) && time >= 0) {
+        updateData.currentTime = time;
+      }
+
+      const result = room.updatePlaybackState(updateData, participant.id);
+      if (!result.success) {
+        socket.emit('error_message', { message: result.reason || 'Permission denied' });
+        return;
+      }
+
+      roomManager.saveRoomState(room);
+      const state = room.toState();
+      socket.to(room.id).emit('pause', { currentTime: state.currentTime, updatedBy: participant.username, socketId: socket.id });
+      io.to(room.id).emit('sync_state', state);
     });
 
     // 5. Playback Controls - Seek
@@ -132,8 +187,9 @@ export function setupSocketHandlers(io: Server, roomManager: RoomManager): void 
       }
 
       roomManager.saveRoomState(room);
-      io.to(room.id).emit('seek', { currentTime: time, updatedBy: participant.username });
-      io.to(room.id).emit('sync_state', room.toState());
+      const state = room.toState();
+      socket.to(room.id).emit('seek', { currentTime: time, updatedBy: participant.username, socketId: socket.id });
+      io.to(room.id).emit('sync_state', state);
     });
 
     // 6. Playback Controls - Change Video
@@ -499,12 +555,16 @@ export function setupSocketHandlers(io: Server, roomManager: RoomManager): void 
                   currentRoom.finalizeSegments();
                   if (!currentRoom.endedAt) currentRoom.endedAt = Date.now();
                   currentRoom.addChatMessage('system', 'Host disconnected. Watch Party ended.', 'system');
+                  io.to(currentRoom.id).emit('room_ended', {
+                    message: 'Host disconnected. Watch Party has ended.',
+                    roomId: currentRoom.id,
+                  });
                   io.to(currentRoom.id).emit('sync_state', currentRoom.toState());
                   roomManager.saveRoomState(currentRoom);
                   roomManager.evictRoom(currentRoom.id);
                }
             }
-          }, 15000);
+          }, 5000);
         }
       }
     });

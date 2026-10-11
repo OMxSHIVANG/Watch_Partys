@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { useSocket } from '../context/SocketContext';
 import { useAuth } from '../context/AuthContext';
-import { Users, Heart, Radio, UserPlus, UserCheck } from 'lucide-react';
+import { Users, Heart, Radio, UserPlus, UserCheck, Square } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
 export const LiveHostInfo: React.FC = () => {
-  const { roomState, socket } = useSocket();
+  const { roomState, socket, endRoom } = useSocket();
   const { user } = useAuth();
   const [host, setHost] = useState<any>(null);
   const [isFollowing, setIsFollowing] = useState(false);
@@ -106,6 +106,19 @@ export const LiveHostInfo: React.FC = () => {
       </div>
       
       <div className="flex items-center gap-3 w-full sm:w-auto">
+        {isOwnProfile && (
+          <button 
+            onClick={() => {
+              if (window.confirm('Are you sure you want to end this live Watch Party for all viewers? It will be saved for replay.')) {
+                endRoom();
+              }
+            }}
+            className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-sm font-bold bg-rose-600 hover:bg-rose-700 text-white transition-all shadow-md shadow-rose-950/40"
+            title="End Watch Party"
+          >
+            <Square className="w-3.5 h-3.5 fill-current" /> End Live
+          </button>
+        )}
         {!isOwnProfile && user && (
           <button 
             onClick={toggleFollow}

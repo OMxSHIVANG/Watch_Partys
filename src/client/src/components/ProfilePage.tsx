@@ -29,6 +29,7 @@ interface RoomHistory {
   purpose?: string;
   description?: string;
   thumbnail?: string;
+  durationWatched?: number;
 }
 
 export const ProfilePage: React.FC = () => {
@@ -39,7 +40,9 @@ export const ProfilePage: React.FC = () => {
   const [history, setHistory] = useState<RoomHistory[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isFollowing, setIsFollowing] = useState(false);
+
   const [activeTab, setActiveTab] = useState<'all' | 'live' | 'past'>('all');
+
   
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState({ username: '', displayName: '', bio: '', avatar: '' });
@@ -134,8 +137,21 @@ export const ProfilePage: React.FC = () => {
     if (!window.confirm('Are you sure you want to delete this stream? It will be removed from your profile.')) return;
     try {
       const token = localStorage.getItem('watchparty_token');
-      await fetch(`/api/rooms/${roomId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
-      setHistory(prev => prev.filter(r => r.id !== roomId));
+      const res = await fetch(`/api/rooms/${roomId}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        setHistory(prev => {
+          const removed = prev.find(r => r.id === roomId);
+          const next = prev.filter(r => r.id !== roomId);
+          if (removed && profile) {
+            setProfile(p => p ? ({
+              ...p,
+              totalHosted: Math.max(0, p.totalHosted - 1),
+              currentlyLive: removed.status === 'live' ? Math.max(0, p.currentlyLive - 1) : p.currentlyLive
+            }) : null);
+          }
+          return next;
+        });
+      }
     } catch (err) {}
   };
 
@@ -153,6 +169,9 @@ export const ProfilePage: React.FC = () => {
     } catch (err) {}
   };
 
+
+
+  
   const filteredHistory = history.filter(h => {
     if (activeTab === 'live') return h.status === 'live';
     if (activeTab === 'past') return h.status === 'ended';
@@ -293,7 +312,7 @@ export const ProfilePage: React.FC = () => {
         </div>
       </div>
 
-      <div className="w-full max-w-4xl flex flex-col gap-6">
+            <div className="w-full max-w-4xl flex flex-col gap-6">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-px">
           <button onClick={() => setActiveTab('all')} className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'all' ? 'border-rose-500 text-rose-400' : 'border-transparent text-slate-400 hover:text-slate-200'}`}>
             All Parties
@@ -315,53 +334,61 @@ export const ProfilePage: React.FC = () => {
           ) : (
             filteredHistory.map(room => (
               <div key={room.id} className="relative">
-              <Link to={room.status === 'ended' ? `/replay/${room.id}` : `/`} onClick={(e) => {
-                 if (room.status === 'live') {
-                    // Copy ID to clipboard as a fallback
-                    navigator.clipboard.writeText(room.id);
-                    alert(`Room Code ${room.id} copied to clipboard! Paste it on the Home screen to join.`);
-                 }
-              }} className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden flex flex-col hover:border-rose-500/50 transition-colors group cursor-pointer block h-full">
-                <div className="relative aspect-video bg-slate-800">
-                  <img src={room.thumbnail || `https://img.youtube.com/vi/${room.videoId}/mqdefault.jpg`} alt="Video" className={`w-full h-full object-cover ${room.status === 'ended' ? 'grayscale opacity-70' : ''}`} />
-                  {room.status === 'live' && (
-                     <div className="absolute top-2 left-2 bg-rose-600 text-[10px] font-bold px-2 py-0.5 rounded shadow text-white flex items-center gap-1.5 uppercase tracking-wider">
-                       <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> Live
-                     </div>
-                  )}
-                  {room.status === 'ended' && (
-                     <div className="absolute top-2 left-2 bg-slate-800 text-[10px] font-bold px-2 py-0.5 rounded shadow text-slate-300 uppercase tracking-wider">
-                       Ended
-                     </div>
-                  )}
-                </div>
-                <div className="p-4 flex-1 flex flex-col">
-                  <h3 className="text-sm font-bold text-white mb-1 truncate">{room.name}</h3>
-                  <div className="text-xs text-slate-400 mb-4 line-clamp-1">{room.videoTitle}</div>
-                  
-                  <div className="mt-auto flex items-center justify-between text-[11px] text-slate-500">
-                    <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> {new Date(room.startedAt).toLocaleDateString()}</span>
-                    <span className="flex items-center gap-1"><Users className="w-3.5 h-3.5" /> {room.participantCount}</span>
-                  </div>
-                </div>
-              </Link>
-              {isOwnProfile && room.status === 'ended' && !editingStreamId && (
+              {isOwnProfile && (
                 <div className="absolute top-2 right-2 z-20">
-                  <button onClick={(e) => { e.preventDefault(); setMenuOpenId(menuOpenId === room.id ? null : room.id); }} className="p-1.5 bg-slate-900/90 rounded-full hover:bg-slate-700 text-white shadow-xl border border-slate-700/50 backdrop-blur-sm transition-all">
+                  <button onClick={(e) => { e.preventDefault(); setMenuOpenId(menuOpenId === room.id ? null : room.id); }} className="p-1.5 bg-black/60 backdrop-blur-md rounded-full hover:bg-black/80 text-white shadow-lg border border-white/10 transition-colors">
                     <MoreVertical className="w-4 h-4" />
                   </button>
                   {menuOpenId === room.id && (
-                    <div className="absolute top-full right-0 mt-1.5 w-36 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden z-50 py-1">
-                      <button onClick={(e) => { setMenuOpenId(null); setEditingStreamId(room.id); setStreamEditForm({ name: room.name, purpose: room.purpose || '', description: room.description || '' }); }} className="w-full text-left px-4 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-800 hover:text-white flex items-center gap-2 transition-colors">
-                        <Edit className="w-3.5 h-3.5" /> Edit Details
-                      </button>
-                      <button onClick={(e) => { setMenuOpenId(null); handleDeleteStream(room.id, e); }} className="w-full text-left px-4 py-2.5 text-xs font-semibold text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 flex items-center gap-2 transition-colors">
+                    <div className="absolute top-full right-0 mt-1 w-36 bg-slate-900 border border-slate-700 rounded-xl shadow-xl overflow-hidden z-50">
+                      
+                      <button onClick={(e) => { setMenuOpenId(null); handleDeleteStream(room.id, e); }} className="w-full text-left px-4 py-2.5 text-sm font-medium text-rose-400 hover:text-rose-300 hover:bg-rose-950/50 flex items-center gap-2 transition-colors">
                         <Trash2 className="w-3.5 h-3.5" /> Delete
                       </button>
                     </div>
                   )}
                 </div>
               )}
+              <Link to={room.status === 'ended' ? `/replay/${room.id}` : '/'} onClick={(e) => {
+                 if (room.status === 'live') {
+                    // Copy ID to clipboard as a fallback
+                    navigator.clipboard.writeText(room.id);
+                    alert(`Room Code ${room.id} copied to clipboard! Paste it on the Home screen to join.`);
+                 }
+              }} className={`bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden flex flex-col transition-colors group block h-full ${room.status === 'ended' ? 'cursor-pointer hover:border-rose-500/50' : 'hover:border-rose-500/50 cursor-pointer'}`}>
+                <div className="relative aspect-video bg-slate-800">
+                  <img src={room.thumbnail || `https://img.youtube.com/vi/${room.videoId}/mqdefault.jpg`} alt="Video" className={`w-full h-full object-cover ${room.status === 'ended' ? 'grayscale opacity-70 group-hover:grayscale-0 group-hover:opacity-100 transition-all' : ''}`} />
+                  {room.status === 'live' && (
+                     <div className="absolute top-2 left-2 bg-rose-600 text-[10px] font-bold px-2 py-0.5 rounded shadow text-white flex items-center gap-1.5 uppercase tracking-wider">
+                       <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" /> Live
+                     </div>
+                  )}
+                  {room.status === 'ended' && (
+                     <div className="absolute top-2 left-2 bg-slate-800/80 backdrop-blur-sm border border-slate-700/50 text-[10px] font-bold px-2 py-0.5 rounded shadow text-slate-300 uppercase tracking-wider flex items-center gap-1">
+                       <span>Replay</span>
+                       {room.durationWatched !== undefined && room.durationWatched > 0 && (
+                         <span className="text-rose-400 font-mono font-normal">
+                           • {Math.floor(room.durationWatched / 60)}:{Math.floor(room.durationWatched % 60).toString().padStart(2, '0')}
+                         </span>
+                       )}
+                     </div>
+                  )}
+                  <div className="absolute bottom-2 right-2 bg-black/80 px-1.5 py-0.5 rounded text-[10px] font-bold text-white flex items-center gap-1 shadow-lg border border-white/10">
+                    <Users className="w-3 h-3" /> {room.participantCount || 0}
+                  </div>
+                </div>
+                <div className="p-4 flex flex-col flex-1">
+                  <h3 className="text-sm font-bold text-slate-200 group-hover:text-white transition-colors line-clamp-2 leading-snug mb-1">{room.name}</h3>
+                  {room.videoTitle && <p className="text-[10px] text-slate-500 line-clamp-1 mb-2">{room.videoTitle}</p>}
+                  
+                  <div className="mt-auto flex items-center justify-between text-[11px] font-medium text-slate-400">
+                    <div className="flex items-center gap-1.5">
+                      <Calendar className="w-3.5 h-3.5" />
+                      {new Date(room.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                    </div>
+                  </div>
+                </div>
+              </Link>
               </div>
             ))
           )}

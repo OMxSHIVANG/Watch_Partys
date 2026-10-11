@@ -28,10 +28,3 @@ export function extractYouTubeId(urlOrId: string): string | null {
   return null;
 }
 
-export const DEFAULT_VIDEOS = [
-  { id: 'L_LUpnjgPso', title: 'Lofi Hip Hop Radio - Beats to Relax/Study to' },
-  { id: 'aqz-KE-bpKQ', title: 'Big Buck Bunny (4K 60fps)' },
-  { id: 'jfKfPfyJRdk', title: 'Lofi Chill Study Beats' },
-  { id: '5qap5aO4i9A', title: 'Lofi Girl - Synthwave Radio' },
-  { id: 'dQw4w9WgXcQ', title: 'Rick Astley - Never Gonna Give You Up' },
-];

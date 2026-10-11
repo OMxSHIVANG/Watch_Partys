@@ -22,6 +22,10 @@ import { RoomManager } from './models/RoomManager';
 import { setupSocketHandlers } from './sockets/socketHandler';
 import { createAuthRouter, getJwtSecret } from './auth/authRouter';
 import jwt from 'jsonwebtoken';
+import fs from 'fs';
+import { UserModel } from './db/models/User';
+import { RoomModel } from './db/models/Room';
+import { FollowModel } from './db/models/Follow';
 
 import { connectDB } from './db/mongoose';
 
@@ -40,6 +44,7 @@ async function startServer() {
   await connectDB();
 
   const db = new DatabaseService();
+  await db.markAllStaleRoomsAsEnded();
   const roomManager = new RoomManager(db);
   await roomManager.initialize();
 
@@ -105,8 +110,6 @@ async function startServer() {
     try {
       const activeRooms = Array.from(roomManager.getAllRooms());
       
-      const UserModel = require('./db/models/User').UserModel;
-      
       const rooms = await Promise.all(activeRooms.map(async (r: any) => {
         const host = await UserModel.findById(r.hostId).lean().catch(() => null);
         return {
@@ -129,52 +132,13 @@ async function startServer() {
       }));
       
       const filtered = rooms
-        .filter(r => r.status === 'live' && (r.participantCount > 0 || r.isPublic))
+        .filter(r => r.status === 'live' && r.participantCount > 0)
         .sort((a, b) => b.participantCount - a.participantCount);
         
       res.json(filtered);
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
 
-  app.get('/api/rooms/recent', async (req, res) => {
-    try {
-      const RoomModel = require('./db/models/Room').RoomModel;
-      const UserModel = require('./db/models/User').UserModel;
-      
-      const recentRooms = await RoomModel.aggregate([
-        { $match: { status: 'ended', isDeleted: { $ne: true } } },
-        { $sort: { endedAt: -1 } },
-        { $group: { _id: "$hostId", doc: { $first: "$$ROOT" } } },
-        { $replaceRoot: { newRoot: "$doc" } },
-        { $sort: { endedAt: -1 } },
-        { $limit: 10 }
-      ]);
-      
-      const populated = await Promise.all(recentRooms.map(async (r: any) => {
-        const host = await UserModel.findById(r.hostId).lean().catch(() => null);
-        return {
-          id: r.roomId,
-          name: r.name,
-          description: r.description,
-          isPublic: r.isPublic,
-          hasPassword: !!r.passwordHash,
-          participantCount: r.currentParticipantCount || 0,
-          participantLimit: r.participantLimit,
-          videoId: r.videoId,
-          videoTitle: r.videoTitle,
-        thumbnail: r.thumbnail,
-          hostId: r.hostId,
-          hostUsername: host ? host.displayName : 'Unknown',
-          hostAvatar: host ? host.avatar : undefined,
-          status: 'ended',
-          startedAt: r.startedAt,
-          endedAt: r.endedAt
-        };
-      }));
-      
-      res.json(populated);
-    } catch (e) { res.status(500).json({ error: (e as Error).message }); }
-  });
 
 
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB limit
@@ -198,9 +162,6 @@ async function startServer() {
   app.get('/api/users/:userId/profile', async (req, res) => {
     try {
       const userId = req.params.userId;
-      const UserModel = require('./db/models/User').UserModel;
-      const RoomModel = require('./db/models/Room').RoomModel;
-      const FollowModel = require('./db/models/Follow').FollowModel;
       
       const user = await UserModel.findById(userId).lean();
       if (!user) return res.status(404).json({ error: 'User not found' });
@@ -226,38 +187,42 @@ async function startServer() {
         purpose: r.purpose,
         status: r.status,
         startedAt: r.startedAt,
-        endedAt: r.endedAt
+        endedAt: r.endedAt,
+        durationWatched: r.durationWatched || (r.segments && r.segments.length > 0 ? r.segments.reduce((acc: number, s: any) => acc + Math.max(0, s.end - s.start), 0) : 0)
       }));
       
       if (memRoom) {
-         const idx = history.findIndex((h: any) => h.id === memRoom.id && h.status === 'live');
-         if (idx !== -1) {
-            history[idx].participantCount = Array.from(memRoom.participants.values()).filter((p: any) => p.isOnline).length;
-         } else {
-            history.unshift({
-              id: memRoom.id,
-              name: memRoom.name,
-              description: memRoom.description,
-              isPublic: memRoom.isPublic,
-              hasPassword: !!memRoom.passwordHash,
-              participantCount: Array.from(memRoom.participants.values()).filter((p: any) => p.isOnline).length,
-              videoId: memRoom.videoId,
-              videoTitle: memRoom.videoTitle,
-              status: 'live',
-              startedAt: memRoom.startedAt,
-              endedAt: memRoom.endedAt
-            });
-         }
+        const idx = history.findIndex((h: any) => h.id === memRoom.id);
+        const memData = {
+          id: memRoom.id,
+          name: memRoom.name,
+          description: memRoom.description,
+          isPublic: memRoom.isPublic,
+          hasPassword: !!memRoom.passwordHash,
+          participantCount: Array.from(memRoom.participants.values()).filter((p: any) => p.isOnline).length,
+          videoId: memRoom.videoId,
+          videoTitle: memRoom.videoTitle,
+          thumbnail: memRoom.thumbnail,
+          purpose: memRoom.purpose,
+          status: 'live' as const,
+          startedAt: memRoom.startedAt,
+          endedAt: memRoom.endedAt,
+          durationWatched: memRoom.durationWatched || (memRoom.segments && memRoom.segments.length > 0 ? memRoom.segments.reduce((acc: number, s: any) => acc + Math.max(0, s.end - s.start), 0) : 0)
+        };
+        if (idx !== -1) {
+          history[idx] = memData;
+        } else {
+          history.unshift(memData);
+        }
       }
       
       const uniqueHistory = [];
       const seen = new Set();
       for (const r of history) {
-         const key = `${r.id}-${r.startedAt}`;
-         if (!seen.has(key)) {
-           seen.add(key);
-           uniqueHistory.push(r);
-         }
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          uniqueHistory.push(r);
+        }
       }
       
       const liveCount = uniqueHistory.filter(r => r.status === 'live').length;
@@ -282,13 +247,43 @@ async function startServer() {
 
 
 
-  
+  app.get('/api/rooms/recent', async (req, res) => {
+    try {
+      const recentRooms = await RoomModel.aggregate([
+        { $match: { status: 'ended', isDeleted: { $ne: true } } },
+        { $sort: { endedAt: -1 } },
+        { $group: { _id: "$hostId", doc: { $first: "$$ROOT" } } },
+        { $replaceRoot: { newRoot: "$doc" } },
+        { $sort: { endedAt: -1 } },
+        { $limit: 10 }
+      ]);
+      
+      const populated = await Promise.all(recentRooms.map(async (r: any) => {
+        const host = await UserModel.findById(r.hostId).lean().catch(() => null);
+        return {
+          id: r.roomId,
+          name: r.name,
+          description: r.description,
+          isPublic: r.isPublic,
+          participantCount: r.currentParticipantCount || 0,
+          videoId: r.videoId,
+          hostId: r.hostId,
+          hostUsername: host ? host.displayName : 'Unknown',
+          hostAvatar: host ? host.avatar : undefined,
+          endedAt: r.endedAt || Date.now(),
+        };
+      }));
+      res.json(populated);
+    } catch (e) { res.status(500).json({ error: (e as Error).message }); }
+  });
+
   app.get('/api/rooms/:roomId/replay', async (req, res) => {
     try {
-      const RoomModel = require('./db/models/Room').RoomModel;
-      const UserModel = require('./db/models/User').UserModel;
+      const roomId = req.params.roomId as string;
       
-      const room = await RoomModel.findOne({ roomId: req.params.roomId }).lean();
+      const room = await RoomModel.findOne({ roomId, isDeleted: { $ne: true }, 'segments.0': { $exists: true } }).sort({ endedAt: -1, startedAt: -1 }).lean()
+        || await RoomModel.findOne({ roomId, isDeleted: { $ne: true } }).sort({ endedAt: -1, startedAt: -1 }).lean()
+        || await RoomModel.findOne({ roomId }).sort({ endedAt: -1, startedAt: -1 }).lean();
       if (!room) return res.status(404).json({ error: 'Stream not found' });
       
       const host = await UserModel.findById(room.hostId).lean().catch(() => null);
@@ -305,31 +300,29 @@ async function startServer() {
          likes: room.likes || [],
          hostId: room.hostId,
          hostUsername: host ? host.displayName : 'Unknown',
-         hostAvatar: host ? host.avatar : undefined
+         hostAvatar: host ? host.avatar : undefined,
+         segments: room.segments
       });
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
-
 
   
   app.delete('/api/rooms/:roomId', requireAuth, async (req, res) => {
     try {
       const userId = (req as any).user.userId;
       const roomId = req.params.roomId as string;
-      const RoomModel = require('./db/models/Room').RoomModel;
       
       const memRoom = roomManager.getRoom(roomId);
-      if (memRoom) {
-        if (memRoom.hostId !== userId) return res.status(403).json({ error: 'Not authorized to delete this stream' });
+      if (memRoom && memRoom.hostId === userId) {
         roomManager.deleteRoom(roomId);
       }
       
-      const room = await RoomModel.findOne({ roomId });
-      if (room && room.hostId !== userId) {
+      const userRoomsCount = await RoomModel.countDocuments({ roomId, hostId: userId });
+      if (userRoomsCount === 0 && (!memRoom || memRoom.hostId !== userId)) {
         return res.status(403).json({ error: 'Not authorized to delete this stream' });
       }
       
-      await RoomModel.updateMany({ roomId }, { $set: { isDeleted: true } });
+      await RoomModel.updateMany({ roomId, hostId: userId }, { $set: { isDeleted: true } });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
@@ -339,7 +332,6 @@ async function startServer() {
       const userId = (req as any).user.userId;
       const roomId = req.params.roomId as string;
       const { name, purpose, description } = req.body;
-      const RoomModel = require('./db/models/Room').RoomModel;
       
       const room = await RoomModel.findOne({ roomId });
       if (!room) return res.status(404).json({ error: 'Stream not found' });
@@ -360,9 +352,6 @@ async function startServer() {
     try {
       const q = req.query.q as string;
       if (!q || q.length < 2) return res.json({ users: [], rooms: [] });
-      
-      const UserModel = require('./db/models/User').UserModel;
-      const RoomModel = require('./db/models/Room').RoomModel;
       
       const users = await UserModel.find({
         $or: [
@@ -401,8 +390,6 @@ async function startServer() {
       const userId = (req as any).user.userId;
       const { displayName, username, bio, avatar } = req.body;
       
-      const UserModel = require('./db/models/User').UserModel;
-      
       if (username) {
         const lowerUsername = username.toLowerCase();
         if (!/^[a-z0-9_]{3,20}$/.test(lowerUsername)) {
@@ -421,6 +408,7 @@ async function startServer() {
       if (avatar !== undefined) updateData.avatar = avatar;
       
       const updated = await UserModel.findByIdAndUpdate(userId, { $set: updateData }, { new: true }).lean();
+      if (!updated) return res.status(404).json({ error: 'User not found' });
       res.json({ success: true, user: { id: updated._id, displayName: updated.displayName, username: updated.username, avatar: updated.avatar, bio: updated.bio } });
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
   });
@@ -438,7 +426,6 @@ async function startServer() {
          io.to(memRoom.id).emit('room_liked', { likes: Array.from(memRoom.likes) });
          roomManager.saveRoomState(memRoom);
       } else {
-         const RoomModel = require('./db/models/Room').RoomModel;
          await RoomModel.findOneAndUpdate({ roomId, status: 'ended' }, { $addToSet: { likes: userId } });
       }
       res.json({ success: true });
@@ -457,7 +444,6 @@ async function startServer() {
          io.to(memRoom.id).emit('room_liked', { likes: Array.from(memRoom.likes) });
          roomManager.saveRoomState(memRoom);
       } else {
-         const RoomModel = require('./db/models/Room').RoomModel;
          await RoomModel.findOneAndUpdate({ roomId, status: 'ended' }, { $pull: { likes: userId } });
       }
       res.json({ success: true });
@@ -470,7 +456,6 @@ async function startServer() {
       const followingId = req.params.userId;
       if (followerId === followingId) return res.status(400).json({ error: 'Cannot follow yourself' });
       
-      const FollowModel = require('./db/models/Follow').FollowModel;
       await FollowModel.findOneAndUpdate(
         { followerId, followingId },
         { followerId, followingId },
@@ -484,7 +469,6 @@ async function startServer() {
     try {
       const followerId = (req as any).user.userId;
       const followingId = req.params.userId;
-      const FollowModel = require('./db/models/Follow').FollowModel;
       await FollowModel.deleteOne({ followerId, followingId });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: (e as Error).message }); }
@@ -492,8 +476,6 @@ async function startServer() {
   
   app.get('/api/users/:userId/followers', async (req, res) => {
     try {
-      const FollowModel = require('./db/models/Follow').FollowModel;
-      const UserModel = require('./db/models/User').UserModel;
       const follows = await FollowModel.find({ followingId: req.params.userId }).lean();
       const users = await UserModel.find({ _id: { $in: follows.map((f: any) => f.followerId) } }).select('displayName avatar').lean();
       res.json(users.map((u: any) => ({ id: u._id, displayName: u.displayName, avatar: u.avatar })));
@@ -502,8 +484,6 @@ async function startServer() {
   
   app.get('/api/users/:userId/following', async (req, res) => {
     try {
-      const FollowModel = require('./db/models/Follow').FollowModel;
-      const UserModel = require('./db/models/User').UserModel;
       const follows = await FollowModel.find({ followerId: req.params.userId }).lean();
       const users = await UserModel.find({ _id: { $in: follows.map((f: any) => f.followingId) } }).select('displayName avatar').lean();
       res.json(users.map((u: any) => ({ id: u._id, displayName: u.displayName, avatar: u.avatar })));
@@ -516,7 +496,7 @@ async function startServer() {
 
   app.get('*', (_req, res) => {
     const indexPath = path.join(clientBuildPath, 'index.html');
-    if (require('fs').existsSync(indexPath)) {
+    if (fs.existsSync(indexPath)) {
       res.sendFile(indexPath);
     } else {
       res.send(`

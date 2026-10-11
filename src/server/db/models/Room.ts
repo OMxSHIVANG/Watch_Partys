@@ -13,7 +13,7 @@ export interface IRoomDocument extends Document {
   status: 'live' | 'ended';
   isDeleted?: boolean;
   thumbnail?: string;
-  segments?: Array<{start: number, end: number}>;
+  segments?: Array<{start: number, end: number, videoId: string, videoTitle?: string}>;
   durationWatched?: number;
   purpose?: string;
   initialVideoPosition?: number;
@@ -87,7 +87,7 @@ const RoomSchema: Schema = new Schema({
   status: { type: String, enum: ['live', 'ended'], default: 'live' },
   isDeleted: { type: Boolean, default: false },
   thumbnail: { type: String },
-  segments: { type: [{ start: Number, end: Number }], default: [] },
+  segments: { type: [{ start: Number, end: Number, videoId: String, videoTitle: String }], default: [] },
   durationWatched: { type: Number },
   purpose: { type: String },
   initialVideoPosition: { type: Number },
